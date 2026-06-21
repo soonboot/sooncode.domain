@@ -96,16 +96,19 @@ monitor.ConfigDBConnection(connection);
 ```
 
 **说明：** `ConfigDBConnection` 内部自动创建了 `EventStore`、`DomainRepository`，之后通过 `monitor.getDomainRepository()` 即可获取。
+**Note:** `ConfigDBConnection` internally creates `EventStore` and `DomainRepository`. Use `monitor.getDomainRepository()` to access it later.
 
 ---
 
 ### 2. Define Domain Model / 定义领域模型
 
 Create a project-level `BaseDomainModel<T>` (once per project) — it wraps common CRUD and timestamp logic. Then define your domain models extending it.
+建议在项目中创建一个 `BaseDomainModel<T>` 基类（一次性工作），封装公共 CRUD 和时间戳逻辑，领域模型继承它即可。
 
-#### 2.1 Define your domain model
+#### 2.1 Define your domain model / 定义领域模型
 
-Extend `BaseDomainModel<T>`, add business methods, events, validation, and `@Lookup` fields:
+Extend `BaseDomainModel<T>`, add business methods with `causes()`, events, validation, and `@Lookup` fields:
+继承 `BaseDomainModel<T>`，通过 `causes()` 添加业务方法、事件、校验和 `@Lookup` 关联字段：
 
 ```java
 @LookupModel
@@ -167,14 +170,14 @@ public class EmailChanged extends DomainEvent {
 }
 ```
 
-**@EventBoot 属性：**
-| 属性 | 说明 |
+**@EventBoot attributes / @EventBoot 属性：**
+| Attribute / 属性 | Description / 说明 |
 |---|---|
-| `StoreFunc` | `add` / `modify` / `delete` / `replay` — 存储行为 |
-| `Params` | 必填字段名，事件创建时校验 |
-| `KeepAll` | 是否保留所有额外字段到动态参数 |
+| `StoreFunc` | `add` / `modify` / `delete` / `replay` — storage behavior / 存储行为 |
+| `Params` | Required field names validated at event creation / 必填字段名 |
+| `KeepAll` | Whether to preserve all extra fields as dynamic params / 保留所有额外字段 |
 
-内置通用事件：`BasicAddEvent`、`BasicModifyEvent`、`BasicDeleteEvent`、`ReplayEvent`
+Built-in events / 内置通用事件: `BasicAddEvent`, `BasicModifyEvent`, `BasicDeleteEvent`, `ReplayEvent`
 
 **实体模型要点 / Key Points:**
 - `causes(EventClass, this)` — 将实体字段映射到事件并注册 / Map entity fields to event and register
@@ -186,7 +189,8 @@ public class EmailChanged extends DomainEvent {
 
 ### 3. Use Model / 使用模型
 
-Get the repository and perform CRUD:
+Get the repository and perform CRUD operations:
+获取仓库对象并执行 CRUD 操作：
 
 ```java
 // --- Create (新增) ---
@@ -209,15 +213,15 @@ User rebuilt = loaded.replay(user.getId(), User.class, 5);
 // → Rebuilds entity by replaying events 0..5 from the event stream
 ```
 
-**Repository 方法一览：**
+**Repository methods / 仓库方法一览：**
 
-| 方法 | 说明 |
+| Method / 方法 | Description / 说明 |
 |---|---|
-| `byId(id, class)` | 从快照加载最新状态 |
-| `entity.add()` | 创建事件流 + 快照 |
-| `entity.save()` | 追加事件 + 更新快照（含并发版本校验） |
-| `entity.delete()` | 令事件流失效 + 删除快照 |
-| `replay(id, class, toVersion)` | 从事件流重放重建实体 |
+| `findByID(id, class)` | Load latest snapshot / 从快照加载最新状态 |
+| `add(entity)` | Create event stream + snapshot / 创建事件流 + 快照 |
+| `save(entity)` | Append events + update snapshot (concurrency check) / 追加事件 + 更新快照（含并发版本校验） |
+| `delete(entity)` | Invalidate stream + remove snapshot / 令事件流失效 + 删除快照 |
+| `replay(id, class, toVersion)` | Rebuild entity from event history / 从事件流重放重建实体 |
 
 ---
 
@@ -246,23 +250,6 @@ User first = new Finder<>(User.class)
     .byField("email", "a@b.com")
     .first();
 List<User> top5 = new Finder<>(User.class)
-    .byField("status", "active")
-    .top(5, Sort.DESC("score"));
-```
-
-**Aggregation / 聚合统计:**
-
-```java
-Map<String, Object> stats = new Finder<>(User.class)
-    .sum(new String[]{"age"}, new String[]{"sex"});
-// → { "男": {"age": 1250}, "女": {"age": 980} }
-
-Map<String, Object> avg = new Finder<>(User.class)
-    .avg(new String[]{"age"}, new String[]{"type"});
-```
-
-**Finder operators / 操作符 (`OType`):**
-`eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `in`, `nin`, `contains`
     .byField("status", "active")
     .top(5, Sort.DESC("score"));
 ```
