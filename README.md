@@ -84,40 +84,70 @@ dependencies {
 
 ### 1. Define Domain Model / 定义领域模型
 
+Extend `DomainModel<T>` with your aggregate root. Define **business methods** that call `causes()` to register events. Use `@Lookup` for auto-denormalization and `IValidate` for validation.
+
 ```java
-// Extend DomainModel<T> — your aggregate root / 聚合根
-@LookupModel
+@LookupModel                                  // Required when using @Lookup
 @ModelSnapshot(collectionName = "user_snapshot")
-public class User extends DomainModel<User> {
+public class User extends DomainModel<User> implements IValidate {
 
     private String name;
     private Integer age;
     private String email;
+    private String enterpriseId;
 
-    // Public business methods that register events / 业务方法注册事件
+    // @Lookup: auto-fetches enterpriseName from Enterprise.name when queried
+    @Lookup(fromModel = Enterprise.class, localField = "enterpriseId", fromField = "name")
+    private String enterpriseName;
+
+    // Business method: set fields, then call causes() to register event
     public void create(String name, Integer age, String email) {
         this.name = name;
         this.age = age;
         this.email = email;
-        add(); // registers BasicAddEvent internally / 内部注册 BasicAddEvent
+        causes(BasicAddEvent.class, this);   // registers BasicAddEvent
     }
 
+    // Business method: modify fields, call causes() to register event
     public void changeEmail(String newEmail) {
-        causes(new EmailChanged(newEmail));
+        this.email = newEmail;
+        causes(new EmailChanged(newEmail));    // registers custom event
     }
 
-    // Event handlers: framework calls when(event) via reflection / 事件处理器：框架通过反射调用
+    public void delete() {
+        causes(BasicDeleteEvent.class);        // registers BasicDeleteEvent
+    }
+
+    // Event handler: framework calls when(ConcreteEvent) via reflection
     private void when(EmailChanged event) {
         this.email = event.getNewEmail();
+    }
+
+    // Validation: called automatically on add/save/delete
+    @Override
+    public ModelValidateFailException validate(FuncType funcType) {
+        if (funcType == FuncType.add || funcType == FuncType.modify) {
+            Validator.validate(name != null && !name.isEmpty(), "用户名不能为空")
+                     .validate(age >= 18, "年龄必须≥18");
+        }
+        return null;
     }
 }
 ```
 
+**实体模型说明：**
+- 通过 `causes(EventClass, this)` 将实体参数映射到事件并注册 / Pass entity fields to event then register
+- 通过 `causes(new CustomEvent(args))` 注册带自定义参数的事件 / Register event with custom params
+- 框架通过反射自动调用 `when(ConcreteEvent)` 处理事件 / Framework auto-routes via `when()` by reflection
+- 业务方法写在实体中，遵循**充血模型** / Business logic lives in the entity (rich domain model)
+
 ### 2. Define Custom Events / 定义自定义事件
+
+Events extend `DomainEvent` and are annotated with `@EventBoot`:
 
 ```java
 @EventBoot(StoreFunc = modify, Params = {"newEmail"})
-@Description("Email changed")
+@Description("修改邮箱")
 public class EmailChanged extends DomainEvent {
     private String newEmail;
 
@@ -129,57 +159,112 @@ public class EmailChanged extends DomainEvent {
 }
 ```
 
+| `@EventBoot` attribute | Description / 说明 |
+|---|---|
+| `StoreFunc` | `add` / `modify` / `delete` / `replay` — 存储行为 |
+| `Params` | Required fields validated at event creation / 必填字段验证 |
+| `KeepAll` | When `true`, preserve all extra fields / 保留所有额外字段 |
+
+Built-in events / 内置通用事件: `BasicAddEvent`, `BasicModifyEvent`, `BasicDeleteEvent`, `ReplayEvent`.
+
 ### 3. Configure Infrastructure / 配置基础设施
 
 ```java
 // One-time setup / 一次性初始化
 Monitor monitor = Monitor.New();
+
+// MongoDB connection + Event Store
 MongoEventSourcingRepository repository =
     new MongoEventSourcingRepository("localhost", 27017, "myDatabase");
 EventStore eventStore = new EventStore(repository);
 monitor.ConfigDomainRepository(new DomainRepository(eventStore));
+
+// (Optional) Register listeners / 注册监听器
+monitor.ListenEvent(EmailChanged.class).trigger((event, model) -> {
+    System.out.println("Email changed: " + event.getId());
+});
 ```
 
-### 4. Persist Your Model / 持久化模型
+### 4. Persist Model / 持久化模型
 
 ```java
 IDomainRepository<User> userRepo = monitor.getDomainRepository();
 
+// --- Create (新增) ---
 User user = new User();
 user.create("Alice", 28, "alice@example.com");
 userRepo.add(user);
 
-// Load from snapshot / 从快照加载
+// --- Query (查询) ---
 User loaded = userRepo.findByID(user.getId(), User.class);
+// → @Lookup fields are auto-populated from related models
 
-// Modify and save / 修改并保存
+// --- Update (修改) ---
 loaded.changeEmail("alice@newdomain.com");
 userRepo.save(loaded);
+// → Concurrency check: throws CheckForConcurrencyException if version mismatch
 
-// Event replay — rebuild state from event stream / 事件重放
+// --- Delete (删除) ---
+loaded.delete();
+userRepo.delete(loaded);
+
+// --- Event Replay (事件重放) ---
 User rebuilt = userRepo.replay(user.getId(), User.class, 5);
+// → Rebuilds entity state by replaying events 0..5 from event stream
 ```
 
-### 5. Query with Finder / 查询
+**Repository methods / 仓库方法:**
+
+| Method | Description / 说明 |
+|---|---|
+| `findByID(id, class)` | Load latest snapshot / 从快照加载 |
+| `add(entity)` | Create new event stream + snapshot / 创建事件流+快照 |
+| `save(entity)` | Append events + update snapshot / 追加事件+更新快照 |
+| `delete(entity)` | Invalidate stream + remove snapshot / 失效流+删除快照 |
+| `replay(id, class, toVersion)` | Rebuild entity from event stream / 重放重建 |
+
+### 5. Query with Finder / 流式查询
+
+**Fluent chaining / 链式调用:**
 
 ```java
-// List with sorting / 排序查询
-List<User> users = new Finder<>(User.class)
-    .list(Sort.ASC("name"));
+// First condition: byField() or byMap() — subsequent: .and()
+List<User> result = new Finder<>(User.class)
+    .byField("age", 18, OType.gte)           // age >= 18
+    .and("status", "active")                  // status == "active"
+    .and("createdAt", startTime, OType.gte)   // createdAt >= startTime
+    .and("createdAt", endTime, OType.lte)     // createdAt <= endTime
+    .list(Sort.DESC("createdAt"));            // sort & execute
+```
 
-// Pagination / 分页
+**List, pagination, first, top:**
+
+```java
+List<User> all = new Finder<>(User.class).list(Sort.ASC("name"));
 Page<User> page = new Finder<>(User.class)
-    .byField("age", 18, OType.gt)
-    .page(20, 1);
+    .byField("age", 18, OType.gte)
+    .page(20, 1);                             // 20 items/page, page 1
+User first = new Finder<>(User.class)
+    .byField("email", "a@b.com")
+    .first();
+List<User> top5 = new Finder<>(User.class)
+    .byField("status", "active")
+    .top(5, Sort.DESC("score"));
+```
 
-// Aggregation / 聚合统计
+**Aggregation / 聚合统计:**
+
+```java
 Map<String, Object> stats = new Finder<>(User.class)
     .sum(new String[]{"age"}, new String[]{"sex"});
+// → { "男": {"age": 1250}, "女": {"age": 980} }
 
-// Distinct / 去重
-List<String> cities = new Finder<>(User.class)
-    .distinct("city", String.class);
+Map<String, Object> avg = new Finder<>(User.class)
+    .avg(new String[]{"age"}, new String[]{"type"});
 ```
+
+**Finder operators / 操作符 (`OType`):**
+`eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `in`, `nin`, `contains`
 
 ---
 
