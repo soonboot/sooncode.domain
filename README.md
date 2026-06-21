@@ -82,48 +82,67 @@ dependencies {
 
 ## 🚀 Quick Start / 快速开始
 
-### 1. Define Domain Model / 定义领域模型
+### 1. Configure Infrastructure / 配置基础设施
 
-Extend `DomainModel<T>` with your aggregate root. Define **business methods** that call `causes()` to register events. Use `@Lookup` for auto-denormalization and `IValidate` for validation.
+First, set up MongoDB connection and init the Monitor (one-time bootstrap):
 
 ```java
-@LookupModel                                  // Required when using @Lookup
+// Init Monitor singleton / 初始化 Monitor
+Monitor monitor = Monitor.New();
+
+// Connect to MongoDB — internally creates EventStore + DomainRepository
+MongoConnection connection = new MongoConnection("localhost", 27017, "myDatabase");
+monitor.ConfigDBConnection(connection);
+```
+
+**说明：** `ConfigDBConnection` 内部自动创建了 `EventStore`、`DomainRepository`，之后通过 `monitor.getDomainRepository()` 即可获取。
+
+---
+
+### 2. Define Domain Model / 定义领域模型
+
+Create a project-level `BaseDomainModel<T>` (once per project) — it wraps common CRUD and timestamp logic. Then define your domain models extending it.
+
+#### 2.1 Define your domain model
+
+Extend `BaseDomainModel<T>`, add business methods, events, validation, and `@Lookup` fields:
+
+```java
+@LookupModel
 @ModelSnapshot(collectionName = "user_snapshot")
-public class User extends DomainModel<User> implements IValidate {
+public class User extends BaseDomainModel<User> implements IValidate {
 
     private String name;
     private Integer age;
     private String email;
     private String enterpriseId;
 
-    // @Lookup: auto-fetches enterpriseName from Enterprise.name when queried
+    // Auto-denormalization: auto-fetches enterpriseName on query
     @Lookup(fromModel = Enterprise.class, localField = "enterpriseId", fromField = "name")
     private String enterpriseName;
 
-    // Business method: set fields, then call causes() to register event
+    // Business method: set fields, register event, event handler auto-called
     public void create(String name, Integer age, String email) {
         this.name = name;
         this.age = age;
         this.email = email;
-        causes(BasicAddEvent.class, this);   // registers BasicAddEvent
+        super.add()
     }
 
-    // Business method: modify fields, call causes() to register event
     public void changeEmail(String newEmail) {
         this.email = newEmail;
-        causes(new EmailChanged(newEmail));    // registers custom event
+        super.modify()
     }
 
-    public void delete() {
-        causes(BasicDeleteEvent.class);        // registers BasicDeleteEvent
+    // Lifecycle hook: override add(map) for custom pre-processing
+    @Override
+    public void add(Map<String, Object> map) {
+        map.put("status", "active");
+        map.put("updatedAt", new Date());
+        super.add(map);
     }
 
-    // Event handler: framework calls when(ConcreteEvent) via reflection
-    private void when(EmailChanged event) {
-        this.email = event.getNewEmail();
-    }
-
-    // Validation: called automatically on add/save/delete
+    // Validation — auto-called on add / save / delete
     @Override
     public ModelValidateFailException validate(FuncType funcType) {
         if (funcType == FuncType.add || funcType == FuncType.modify) {
@@ -135,95 +154,74 @@ public class User extends DomainModel<User> implements IValidate {
 }
 ```
 
-**实体模型说明：**
-- 通过 `causes(EventClass, this)` 将实体参数映射到事件并注册 / Pass entity fields to event then register
-- 通过 `causes(new CustomEvent(args))` 注册带自定义参数的事件 / Register event with custom params
-- 框架通过反射自动调用 `when(ConcreteEvent)` 处理事件 / Framework auto-routes via `when()` by reflection
-- 业务方法写在实体中，遵循**充血模型** / Business logic lives in the entity (rich domain model)
-
-### 2. Define Custom Events / 定义自定义事件
-
-Events extend `DomainEvent` and are annotated with `@EventBoot`:
+#### 2.3 Define custom events
 
 ```java
 @EventBoot(StoreFunc = modify, Params = {"newEmail"})
 @Description("修改邮箱")
 public class EmailChanged extends DomainEvent {
     private String newEmail;
-
     public EmailChanged() {}
-    public EmailChanged(String newEmail) {
-        this.newEmail = newEmail;
-    }
+    public EmailChanged(String newEmail) { this.newEmail = newEmail; }
     public String getNewEmail() { return newEmail; }
 }
 ```
 
-| `@EventBoot` attribute | Description / 说明 |
+**@EventBoot 属性：**
+| 属性 | 说明 |
 |---|---|
 | `StoreFunc` | `add` / `modify` / `delete` / `replay` — 存储行为 |
-| `Params` | Required fields validated at event creation / 必填字段验证 |
-| `KeepAll` | When `true`, preserve all extra fields / 保留所有额外字段 |
+| `Params` | 必填字段名，事件创建时校验 |
+| `KeepAll` | 是否保留所有额外字段到动态参数 |
 
-Built-in events / 内置通用事件: `BasicAddEvent`, `BasicModifyEvent`, `BasicDeleteEvent`, `ReplayEvent`.
+内置通用事件：`BasicAddEvent`、`BasicModifyEvent`、`BasicDeleteEvent`、`ReplayEvent`
 
-### 3. Configure Infrastructure / 配置基础设施
+**实体模型要点 / Key Points:**
+- `causes(EventClass, this)` — 将实体字段映射到事件并注册 / Map entity fields to event and register
+- `causes(new CustomEvent(args))` — 自定义参数事件 / Custom event constructor params
+- `when(ConcreteEvent event)` — 反射自动调用的处理器 / Auto-routed event handler by reflection
+- 业务逻辑写在实体中，遵循**充血模型** / Business logic lives in the entity (rich domain model)
 
-```java
-// One-time setup / 一次性初始化
-Monitor monitor = Monitor.New();
+---
 
-// MongoDB connection + Event Store
-MongoEventSourcingRepository repository =
-    new MongoEventSourcingRepository("localhost", 27017, "myDatabase");
-EventStore eventStore = new EventStore(repository);
-monitor.ConfigDomainRepository(new DomainRepository(eventStore));
+### 3. Use Model / 使用模型
 
-// (Optional) Register listeners / 注册监听器
-monitor.ListenEvent(EmailChanged.class).trigger((event, model) -> {
-    System.out.println("Email changed: " + event.getId());
-});
-```
-
-### 4. Persist Model / 持久化模型
+Get the repository and perform CRUD:
 
 ```java
-IDomainRepository<User> userRepo = monitor.getDomainRepository();
-
 // --- Create (新增) ---
 User user = new User();
 user.create("Alice", 28, "alice@example.com");
-userRepo.add(user);
 
-// --- Query (查询) ---
-User loaded = userRepo.findByID(user.getId(), User.class);
-// → @Lookup fields are auto-populated from related models
+// --- Get by ID (查询) ---
+User loaded = new Finder(User.class).byId(user.getId());
+// → @Lookup fields (enterpriseName) auto-populated
 
 // --- Update (修改) ---
 loaded.changeEmail("alice@newdomain.com");
-userRepo.save(loaded);
 // → Concurrency check: throws CheckForConcurrencyException if version mismatch
 
 // --- Delete (删除) ---
-loaded.delete();
-userRepo.delete(loaded);
+loaded.delete();          // registers BasicDeleteEvent
 
-// --- Event Replay (事件重放) ---
-User rebuilt = userRepo.replay(user.getId(), User.class, 5);
-// → Rebuilds entity state by replaying events 0..5 from event stream
+// --- Replay (事件重放) ---
+User rebuilt = loaded.replay(user.getId(), User.class, 5);
+// → Rebuilds entity by replaying events 0..5 from the event stream
 ```
 
-**Repository methods / 仓库方法:**
+**Repository 方法一览：**
 
-| Method | Description / 说明 |
+| 方法 | 说明 |
 |---|---|
-| `findByID(id, class)` | Load latest snapshot / 从快照加载 |
-| `add(entity)` | Create new event stream + snapshot / 创建事件流+快照 |
-| `save(entity)` | Append events + update snapshot / 追加事件+更新快照 |
-| `delete(entity)` | Invalidate stream + remove snapshot / 失效流+删除快照 |
-| `replay(id, class, toVersion)` | Rebuild entity from event stream / 重放重建 |
+| `byId(id, class)` | 从快照加载最新状态 |
+| `entity.add()` | 创建事件流 + 快照 |
+| `entity.save()` | 追加事件 + 更新快照（含并发版本校验） |
+| `entity.delete()` | 令事件流失效 + 删除快照 |
+| `replay(id, class, toVersion)` | 从事件流重放重建实体 |
 
-### 5. Query with Finder / 流式查询
+---
+
+### 4. Query with Finder / 流式查询
 
 **Fluent chaining / 链式调用:**
 
@@ -265,6 +263,23 @@ Map<String, Object> avg = new Finder<>(User.class)
 
 **Finder operators / 操作符 (`OType`):**
 `eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `in`, `nin`, `contains`
+    .byField("status", "active")
+    .top(5, Sort.DESC("score"));
+```
+
+**Aggregation / 聚合统计:**
+
+```java
+Map<String, Object> stats = new Finder<>(User.class)
+    .sum(new String[]{"age"}, new String[]{"sex"});
+// → { "男": {"age": 1250}, "女": {"age": 980} }
+
+Map<String, Object> avg = new Finder<>(User.class)
+    .avg(new String[]{"age"}, new String[]{"type"});
+```
+
+**Finder operators / 操作符 (`OType`):**
+`eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `in`, `nin`, `contains`
 
 ---
 
@@ -285,7 +300,7 @@ All aggregate roots extend `DomainModel<T>`. It manages:
   快照支持——当前状态持久化，查询快速
 
 ```java
-public class Order extends DomainModel<Order> {
+public class Order extends BaseDomainModel<Order> {
     private String productId;
     private int quantity;
 
@@ -362,7 +377,7 @@ Declare cross-entity field references. When the source entity changes, the frame
 声明跨实体字段引用。当源实体变化时，框架自动同步到所有引用快照：
 
 ```java
-public class Order extends DomainModel<Order> {
+public class Order extends BaseDomainModel<Order> {
     @Lookup(fromModel = User.class, localField = "userId", fromField = "name")
     private String userName; // auto-updated when User.name changes / 当 User.name 变化时自动更新
 }
@@ -381,7 +396,7 @@ session.rollback(); // discards on error / 回滚
 ### Validation / 校验
 
 ```java
-public class User extends DomainModel<User> implements IValidate {
+public class User extends BaseDomainModel<User> implements IValidate {
     @Override
     public ModelValidateFailException validate(FuncType funcType) {
         Validator.validate(name != null, "Name is required / 名称必填");
