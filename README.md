@@ -5,6 +5,7 @@
 [![Maven](https://img.shields.io/badge/Maven-3.6+-red.svg)](https://maven.apache.org)
 [![MongoDB](https://img.shields.io/badge/MongoDB-4.4+-green.svg)](https://mongodb.com)
 [![version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/soonboot/sooncode.domain)
+[![JitPack](https://jitpack.io/v/soonboot/sooncode.domain.svg)](https://jitpack.io/#soonboot/sooncode.domain)
 
 > **A Java DDD + Event Sourcing framework backed by MongoDB.**
 >
@@ -30,17 +31,41 @@ Built for developers who want **clean domain models, immutable event histories, 
 
 ---
 
-## 📦 Maven
+## 📦 Install
 
-Add to your `pom.xml`:
+### Via JitPack (Recommended)
+
+Add the JitPack repository and dependency to your `pom.xml`:
 
 ```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+
 <dependency>
-    <groupId>com.sooncode.project</groupId>
+    <groupId>com.github.soonboot</groupId>
     <artifactId>sooncode.domain</artifactId>
-    <version>1.7.2</version>
+    <version>v1.7.2</version>
 </dependency>
 ```
+
+**Gradle:**
+
+```groovy
+repositories {
+    maven { url 'https://jitpack.io' }
+}
+dependencies {
+    implementation 'com.github.soonboot:sooncode.domain:v1.7.2'
+}
+```
+
+### Via Maven Central (Future)
+
+Planned for future releases.
 
 ---
 
