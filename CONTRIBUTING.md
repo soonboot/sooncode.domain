@@ -85,7 +85,7 @@ Default test assumes MongoDB on `localhost:27017`. To customize:
 ```java
 // In your test setup
 MongoEventSourcingRepository repository = 
-    new MongoSourcingRepository("your_host", your_port, "your_database");
+    new MongoEventSourcingRepository("your_host", your_port, "your_database");
 ```
 
 ## Project Structure

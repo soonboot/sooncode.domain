@@ -19,11 +19,37 @@ mvn clean install -DskipTests
 mvn test
 ```
 
+## Publish (JitPack)
+
+JitPack builds automatically from GitHub tags. No manual deploy step needed.
+
+```bash
+# Tag a release
+git tag v1.8.0
+git push origin v1.8.0
+```
+
+Users then add JitPack repository + dependency to their project:
+
+```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+<dependency>
+    <groupId>com.github.soonboot</groupId>
+    <artifactId>sooncode.domain</artifactId>
+    <version>v1.7.2</version>
+</dependency>
+```
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `pom.xml` | Build config, dependencies, distribution management |
+| `pom.xml` | Build config, dependencies, JitPack-compatible setup |
 | `src/main/java/.../model/DomainModel.java` | Aggregate root base class with event sourcing |
 | `src/main/java/.../model/DomainEvent.java` | Event base class with param validation |
 | `src/main/java/.../model/EventStore.java` | Event stream + snapshot management |
