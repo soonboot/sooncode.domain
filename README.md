@@ -113,7 +113,7 @@ Extend `BaseDomainModel<T>`, add business methods with `causes()`, events, valid
 ```java
 @LookupModel
 @ModelSnapshot(collectionName = "user_snapshot")
-public class User extends BaseDomainModel<User> implements IValidate {
+public class User extends DomainModel<User> implements IValidate {
 
     private String name;
     private Integer age;
@@ -134,15 +134,7 @@ public class User extends BaseDomainModel<User> implements IValidate {
 
     public void changeEmail(String newEmail) {
         this.email = newEmail;
-        super.modify()
-    }
-
-    // Lifecycle hook: override add(map) for custom pre-processing
-    @Override
-    public void add(Map<String, Object> map) {
-        map.put("status", "active");
-        map.put("updatedAt", new Date());
-        super.add(map);
+        super.update()
     }
 
     // Validation — auto-called on add / save / delete
