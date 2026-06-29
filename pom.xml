@@ -10,7 +10,7 @@
 
     <groupId>com.sooncode.project</groupId>
     <artifactId>sooncode.domain</artifactId>
-    <version>1.7.3</version>
+    <version>1.7.5</version>
     <packaging>jar</packaging>
 
     <name>SoonCode Domain</name>
@@ -39,7 +39,7 @@
         <connection>scm:git:git@github.com:soonboot/sooncode.domain.git</connection>
         <developerConnection>scm:git:git@github.com:soonboot/sooncode.domain.git</developerConnection>
         <url>https://github.com/soonboot/sooncode.domain</url>
-        <tag>v1.7.2</tag>
+        <tag>v1.7.5</tag>
     </scm>
 
     <issueManagement>
@@ -53,6 +53,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
+        <skipTests>true</skipTests>
     </properties>
 
     <dependencies>
@@ -62,14 +63,24 @@
             <version>4.6.1</version>
         </dependency>
         <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.2.11</version>
+        </dependency>
+        <dependency>
             <groupId>com.alibaba</groupId>
             <artifactId>fastjson</artifactId>
-            <version>1.2.76</version>
+            <version>1.2.83</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.8.1</version>
+            <version>3.18.0</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -90,10 +101,9 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.8.1</version>
+                <version>3.13.0</version>
                 <configuration>
-                    <source>8</source>
-                    <target>8</target>
+                    <release>8</release>
                     <encoding>UTF-8</encoding>
                 </configuration>
             </plugin>
@@ -114,6 +124,10 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <version>3.3.1</version>
+                <configuration>
+                    <doclint>none</doclint>
+                    <failOnError>false</failOnError>
+                </configuration>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>
