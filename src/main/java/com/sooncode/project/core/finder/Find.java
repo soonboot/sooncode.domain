@@ -47,11 +47,7 @@ class Find<T  extends DomainModel<T>> implements IFind<T>{
         try {
             for (PropertyDescriptor p : properties) {
                 Object o = p.getReadMethod().invoke(model);
-                if (o==null) continue;
-                if (ValueObject.class.isAssignableFrom(p.getPropertyType())) {
-                    map.put(p.getName(), ((ValueObject)o).getValue());
-                }
-                else map.put(p.getName(),o);
+                if (o!=null) map.put(p.getName(),o);
             }
         }catch (Exception ex){ex.printStackTrace();}
         return addField.add(map);

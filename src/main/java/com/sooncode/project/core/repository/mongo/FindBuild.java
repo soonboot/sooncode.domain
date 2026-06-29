@@ -106,9 +106,6 @@ public class FindBuild {
     private String getKey(Map.Entry<String, List<FindHelper.ValueType>> field){
         String key=field.getKey().split("\\.")[0];
         if(!properties.containsKey(key)) throw new DomainException("没有找到对应的字段名："+key);
-        if(ValueObject.class.isAssignableFrom(properties.get(key).getPropertyType())){
-            return this.prefix+field.getKey()+"."+"value";
-        }
         else return this.prefix+field.getKey();
     }
 }

@@ -134,11 +134,6 @@ public abstract class DomainEvent implements Serializable {
                 property.getWriteMethod().invoke(en,value);
                 return;
             }
-            if(ValueObject.class.isAssignableFrom(propertyType)) {
-                Class[] param={value.getClass()};
-                Constructor constructor = ReflectUtils.getConstructor(propertyType,param);
-                value= constructor.newInstance(value);
-            }
             if(value==null)return;
             if(propertyType.isAssignableFrom(value.getClass())){
                 property.getWriteMethod().invoke(en,value);

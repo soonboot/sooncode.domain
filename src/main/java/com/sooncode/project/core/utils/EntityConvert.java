@@ -21,11 +21,6 @@ public class EntityConvert{
                         property.getWriteMethod().invoke(target,obj);
                         continue;
                     }
-                    if(ValueObject.class.isAssignableFrom(propertyClazz)) {
-                        Class[] param={obj.getClass()};
-                        Constructor constructor = ReflectUtils.getConstructor(propertyClazz,param);
-                        obj= constructor.newInstance(obj);
-                    }
                     if(obj==null)continue;
                     if(propertyClazz.isAssignableFrom(obj.getClass())){
                         property.getWriteMethod().invoke(target,obj);
@@ -51,9 +46,7 @@ public class EntityConvert{
                     map.put(property.getName(),null);
                     continue;
                 }
-                else if(ValueObject.class.isAssignableFrom(o.getClass())){
-                    o=((ValueObject<?>)o).getValue();
-                }else if(SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
+                else if(SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
                     o=entityToMap(o);
                 }
                 map.put(property.getName(),o);
@@ -99,10 +92,7 @@ public class EntityConvert{
                         try {
                             Object o = thisProperty.getReadMethod().invoke(SourceObj);
                             if(o==null)break;
-                            if (ValueObject.class.isAssignableFrom(o.getClass())) {
-                                o = ((ValueObject) o).getValue();
-                            }
-                            if(o==null||o.toString().trim().length()<=0)break;
+                            if(o.toString().trim().length()<=0)break;
                             if(targetPropterty.getPropertyType().isAssignableFrom(o.getClass())){
                                 targetPropterty.getWriteMethod().invoke(targetObj,o);
                             }

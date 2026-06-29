@@ -6,8 +6,11 @@ import java.io.Serializable;
  * 值对象的基类
  * @param <T>
  */
-public abstract class ValueObject<T> implements Serializable {
-    protected T value;
-    public abstract T getValue();
+public interface ValueObject<T> extends Serializable {
+    T getValue();
+    default void validate() {}
+    default boolean isEmpty() {
+        return false;
+    }
 }
 

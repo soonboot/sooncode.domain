@@ -10,7 +10,7 @@
 
     <groupId>com.sooncode.project</groupId>
     <artifactId>sooncode.domain</artifactId>
-    <version>1.7.5</version>
+    <version>1.7.6</version>
     <packaging>jar</packaging>
 
     <name>SoonCode Domain</name>
@@ -39,7 +39,7 @@
         <connection>scm:git:git@github.com:soonboot/sooncode.domain.git</connection>
         <developerConnection>scm:git:git@github.com:soonboot/sooncode.domain.git</developerConnection>
         <url>https://github.com/soonboot/sooncode.domain</url>
-        <tag>v1.7.5</tag>
+        <tag>v1.7.6</tag>
     </scm>
 
     <issueManagement>
@@ -48,11 +48,11 @@
     </issueManagement>
 
     <properties>
-        <java.version>1.8</java.version>
+        <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
         <skipTests>true</skipTests>
     </properties>
 
@@ -103,7 +103,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
-                    <release>8</release>
+                    <release>21</release>
                     <encoding>UTF-8</encoding>
                 </configuration>
             </plugin>
