@@ -92,19 +92,19 @@ public abstract class DomainModel<T> extends Entity {
     public void add(){
         causes(new BasicAddEvent(),this);
     }
-    protected void update(){
+    public void update(){
         causes(new BasicModifyEvent(),this);
     }
-    protected void delete(){
+    public void delete(){
         causes(new BasicDeleteEvent(),this);
     }
-    protected void replay(int toVersion){
+    public void replay(int toVersion){
         causes(new ReplayEvent(getId(),this,0,toVersion));
     }
-    protected void replay(int fromVersion, int toVersion){
+    public void replay(int fromVersion, int toVersion){
         causes(new ReplayEvent(getId(),this,fromVersion,toVersion));
     }
-    protected void replay(){
+    public void replay(){
         causes(new ReplayEvent(getId(),this,0,this.getVersion()-1));
     }
 
