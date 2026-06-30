@@ -7,7 +7,7 @@ import java.io.Serializable;
  * @param <T>
  */
 public interface ValueObject<T> extends Serializable {
-    T getValue();
+    T toValue();
     default void validate() {}
     default boolean isEmpty() {
         return false;
