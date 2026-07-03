@@ -10,7 +10,7 @@
 
     <groupId>com.sooncode.project</groupId>
     <artifactId>sooncode.domain</artifactId>
-    <version>1.7.7</version>
+    <version>1.7.8</version>
     <packaging>jar</packaging>
 
     <name>SoonCode Domain</name>
@@ -39,7 +39,7 @@
         <connection>scm:git:git@github.com:soonboot/sooncode.domain.git</connection>
         <developerConnection>scm:git:git@github.com:soonboot/sooncode.domain.git</developerConnection>
         <url>https://github.com/soonboot/sooncode.domain</url>
-        <tag>v1.7.7</tag>
+        <tag>v1.7.8</tag>
     </scm>
 
     <issueManagement>

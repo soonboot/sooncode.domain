@@ -7,6 +7,7 @@ import com.sooncode.project.core.model.ValueObject;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Constructor;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class EntityConvert{
@@ -46,7 +47,26 @@ public class EntityConvert{
                     map.put(property.getName(),null);
                     continue;
                 }
-                else if(SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
+                else if(Map.class.isAssignableFrom(o.getClass())){
+                    Map<String,Object> objMap=(Map<String,Object>)o;
+                    for(Map.Entry<String,Object> entry : objMap.entrySet()){
+                        Object value=entry.getValue();
+                        if(value==null) continue;
+                        else if(ValueObject.class.isAssignableFrom(value.getClass())
+                            || SimpleObject.class.isAssignableFrom(value.getClass())
+                            || DomainModel.class.isAssignableFrom(value.getClass())){
+                            value = entityToMap(value);
+                            objMap.put(entry.getKey(),value);
+                        }
+                    }
+                }
+                else if(List.class.isAssignableFrom(o.getClass())){
+                    List<Object> list=(List<Object>)o;
+                    for(Object value : (List<Object>)o){
+                        list.add(entityToMap(value));
+                    }
+                }
+                else if(ValueObject.class.isAssignableFrom(o.getClass())||SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
                     o=entityToMap(o);
                 }
                 map.put(property.getName(),o);
