@@ -6,6 +6,12 @@ import com.sooncode.project.core.model.SimpleObject;
 import com.sooncode.project.core.model.ValueObject;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Constructor;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +44,7 @@ public class EntityConvert{
         }
     }
     public static Map<String,Object> entityToMap(Object sourctObj){
+        if(sourctObj==null) return null;
         PropertyDescriptor[] properties = ReflectUtils.getBeanGetters(sourctObj.getClass());
         Map<String,Object> map=new HashMap<>();
         for (PropertyDescriptor property : properties) {
@@ -63,7 +70,14 @@ public class EntityConvert{
                 else if(List.class.isAssignableFrom(o.getClass())){
                     List<Object> list=(List<Object>)o;
                     for(Object value : (List<Object>)o){
-                        list.add(entityToMap(value));
+                        if(value==null)
+                            list.add(null);
+                        else if(ValueObject.class.isAssignableFrom(value.getClass())
+                            || SimpleObject.class.isAssignableFrom(value.getClass())
+                            || DomainModel.class.isAssignableFrom(value.getClass())){
+                            value = entityToMap(value);
+                            list.add(value);
+                        }
                     }
                 }
                 else if(ValueObject.class.isAssignableFrom(o.getClass())||SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
@@ -131,4 +145,5 @@ public class EntityConvert{
             }
         }
     }
+
 }

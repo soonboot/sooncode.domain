@@ -3,6 +3,8 @@ import org.apache.commons.lang3.time.DateUtils;
 
 import javax.swing.text.DateFormatter;
 import java.lang.reflect.Constructor;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.time.LocalDate;
@@ -61,4 +63,30 @@ public class BaseTypeConvert {
         put(boolean.class,false);
         put(String.class,"");
     }};
+    public static boolean isSingleValueType(Object obj){
+        if (obj == null) return true; // null 视为单值
+
+        Class<?> clazz = obj.getClass();
+
+        // 1. 基本类型包装类
+        if (clazz.isPrimitive()) return true;
+
+        // 2. 常见单值类型
+        return clazz == String.class ||
+            clazz == Integer.class ||
+            clazz == Long.class ||
+            clazz == Double.class ||
+            clazz == Float.class ||
+            clazz == Boolean.class ||
+            clazz == Short.class ||
+            clazz == Byte.class ||
+            clazz == Character.class ||
+            clazz == BigDecimal.class ||
+            clazz == BigInteger.class ||
+            clazz == Date.class ||
+            clazz == LocalDate.class ||
+            clazz == LocalDateTime.class ||
+            clazz == LocalTime.class ||
+            clazz == Enum.class;  // 枚举也是单值
+    }
 }
