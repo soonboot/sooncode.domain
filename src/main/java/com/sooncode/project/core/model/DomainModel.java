@@ -89,14 +89,14 @@ public abstract class DomainModel<T> extends Entity {
         version++;
         return version;
     }
-    public void beforeAdd(DomainModel<T> model,DomainEvent event){};
-    public void afterAdd(DomainModel<T >model,DomainEvent event){};
-    public void beforeUpdate(DomainModel<T >model,DomainEvent event){};
-    public void afterUpdate(DomainModel<T >model,DomainEvent event){};
-    public void beforeDelete(DomainModel<T >model,DomainEvent event){};
-    public void afterDelete(DomainModel<T >model,DomainEvent event){};
-    public void beforeStore(DomainModel<T >model,DomainEvent event){};
-    public void afterStore(DomainModel<T >model,DomainEvent event){};
+    protected void beforeAdd(DomainEvent event){};
+    protected void afterAdd(DomainEvent event){};
+    public void beforeUpdate(DomainEvent event){};
+    public void afterUpdate(DomainEvent event){};
+    protected void beforeDelete(DomainEvent event){};
+    protected void afterDelete(DomainEvent event){};
+    protected void beforeStore(DomainEvent event){};
+    protected void afterStore(DomainEvent event){};
 
     public void add(){
         causes(new BasicAddEvent(),this);
@@ -131,20 +131,20 @@ public abstract class DomainModel<T> extends Entity {
         if(event.getClass().isAnnotationPresent(EventBoot.class)&&Monitor.instance!=null) {
             EventBoot eventBoot=event.getClass().getAnnotation(EventBoot.class);
             if(eventBoot.StoreFunc()== FuncType.add)
-                beforeAdd(this,event);
+                beforeAdd(event);
             else if(eventBoot.StoreFunc()== FuncType.modify)
-                beforeUpdate(this,event);
+                beforeUpdate(event);
             else if(eventBoot.StoreFunc()== FuncType.delete)
-                beforeDelete(this,event);
-            beforeStore(this,event);
+                beforeDelete(event);
+            beforeStore(event);
             Monitor.instance.Store(this, event.getClass().getAnnotation(EventBoot.class));
             if(eventBoot.StoreFunc()== FuncType.add)
-                afterAdd(this,event);
+                afterAdd(event);
             else if(eventBoot.StoreFunc()== FuncType.modify)
-                afterUpdate(this,event);
+                afterUpdate(event);
             else if(eventBoot.StoreFunc()== FuncType.delete)
-                afterDelete(this,event);
-            afterStore(this,event);
+                afterDelete(event);
+            afterStore(event);
         }
         if(Monitor.instance!=null){
             Monitor.instance.Notice(event,this);
