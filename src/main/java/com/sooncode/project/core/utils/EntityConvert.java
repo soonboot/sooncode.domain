@@ -11,10 +11,7 @@ import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class EntityConvert{
     public static void mapToEntity(Map<String,Object> map, Object target){
@@ -70,20 +67,21 @@ public class EntityConvert{
                     }
                 }
                 else if(List.class.isAssignableFrom(o.getClass())){
-                    List<Object> list=(List<Object>)o;
+                    List<Object> newList= new ArrayList<>();
                     for(Object value : (List<Object>)o){
-                        if(value==null)
-                            list.add(null);
-                        else if(BaseTypeConvert.isSingleValueType(value))
-                            list.add(value);
-                        else if(ValueObject.class.isAssignableFrom(value.getClass())
+                        if(value==null){
+                            newList.add(null);
+                        }else if(BaseTypeConvert.isSingleValueType(value)){
+                            newList.add(value);
+                        }else if(ValueObject.class.isAssignableFrom(value.getClass())
                             || SimpleObject.class.isAssignableFrom(value.getClass())
                             || DomainModel.class.isAssignableFrom(value.getClass())){
-                            value = entityToMap(value);
-                            list.add(value);
+                            newList.add(entityToMap(value));
+                        }else{
+                            newList.add(value);
                         }
-
                     }
+                    o=newList;
                 }
                 else if(ValueObject.class.isAssignableFrom(o.getClass())||SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
                     o=entityToMap(o);
