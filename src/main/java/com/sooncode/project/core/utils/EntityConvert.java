@@ -59,6 +59,8 @@ public class EntityConvert{
                     for(Map.Entry<String,Object> entry : objMap.entrySet()){
                         Object value=entry.getValue();
                         if(value==null) continue;
+                        else if(BaseTypeConvert.isSingleValueType(value))
+                            objMap.put(entry.getKey(),value);
                         else if(ValueObject.class.isAssignableFrom(value.getClass())
                             || SimpleObject.class.isAssignableFrom(value.getClass())
                             || DomainModel.class.isAssignableFrom(value.getClass())){
@@ -72,12 +74,15 @@ public class EntityConvert{
                     for(Object value : (List<Object>)o){
                         if(value==null)
                             list.add(null);
+                        else if(BaseTypeConvert.isSingleValueType(value))
+                            list.add(value);
                         else if(ValueObject.class.isAssignableFrom(value.getClass())
                             || SimpleObject.class.isAssignableFrom(value.getClass())
                             || DomainModel.class.isAssignableFrom(value.getClass())){
                             value = entityToMap(value);
                             list.add(value);
                         }
+
                     }
                 }
                 else if(ValueObject.class.isAssignableFrom(o.getClass())||SimpleObject.class.isAssignableFrom(o.getClass())|| DomainModel.class.isAssignableFrom(o.getClass())){
