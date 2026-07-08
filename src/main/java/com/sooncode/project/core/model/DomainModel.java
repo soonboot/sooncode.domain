@@ -5,6 +5,7 @@ import com.sooncode.project.core.generic.BasicAddEvent;
 import com.sooncode.project.core.generic.BasicDeleteEvent;
 import com.sooncode.project.core.generic.BasicModifyEvent;
 import com.sooncode.project.core.generic.ReplayEvent;
+import com.sooncode.project.core.monitor.FuncType;
 import com.sooncode.project.core.monitor.Monitor;
 import com.sooncode.project.core.utils.EntityConvert;
 
@@ -88,6 +89,14 @@ public abstract class DomainModel<T> extends Entity {
         version++;
         return version;
     }
+    public void beforeAdd(DomainModel<T> model,DomainEvent event){};
+    public void afterAdd(DomainModel<T >model,DomainEvent event){};
+    public void beforeUpdate(DomainModel<T >model,DomainEvent event){};
+    public void afterUpdate(DomainModel<T >model,DomainEvent event){};
+    public void beforeDelete(DomainModel<T >model,DomainEvent event){};
+    public void afterDelete(DomainModel<T >model,DomainEvent event){};
+    public void beforeStore(DomainModel<T >model,DomainEvent event){};
+    public void afterStore(DomainModel<T >model,DomainEvent event){};
 
     public void add(){
         causes(new BasicAddEvent(),this);
@@ -118,11 +127,29 @@ public abstract class DomainModel<T> extends Entity {
         events.add(event);
         apply(event);
         stored=false;
-        if(event.getClass().isAnnotationPresent(EventBoot.class)&&Monitor.instance!=null)
-            Monitor.instance.Store(this,event.getClass().getAnnotation(EventBoot.class));
+
+        if(event.getClass().isAnnotationPresent(EventBoot.class)&&Monitor.instance!=null) {
+            EventBoot eventBoot=event.getClass().getAnnotation(EventBoot.class);
+            if(eventBoot.StoreFunc()== FuncType.add)
+                beforeAdd(this,event);
+            else if(eventBoot.StoreFunc()== FuncType.modify)
+                beforeUpdate(this,event);
+            else if(eventBoot.StoreFunc()== FuncType.delete)
+                beforeDelete(this,event);
+            beforeStore(this,event);
+            Monitor.instance.Store(this, event.getClass().getAnnotation(EventBoot.class));
+            if(eventBoot.StoreFunc()== FuncType.add)
+                afterAdd(this,event);
+            else if(eventBoot.StoreFunc()== FuncType.modify)
+                afterUpdate(this,event);
+            else if(eventBoot.StoreFunc()== FuncType.delete)
+                afterDelete(this,event);
+            afterStore(this,event);
+        }
         if(Monitor.instance!=null){
             Monitor.instance.Notice(event,this);
         }
+
     }
     protected void causes(DomainEvent event, Map params){
         event.convertParam(params);
