@@ -39,8 +39,10 @@ class FinderTest {
     }
     @Test
     void FindTest() throws InterruptedException {
-        List<testModel> testModels=new Finder<>(testModel.class).top(10);
+        List<testModel> testModels=new Finder<>(testModel.class)
+            .top(10);
         System.out.println(JSON.toJSONString(testModels));
+
     }
     @Test
     void testSession() throws InterruptedException {

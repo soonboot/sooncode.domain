@@ -12,6 +12,7 @@ import java.lang.reflect.Type;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class Finder<T extends DomainModel<T>> implements
     IFind<T>,IFindAction<T>,IAggregate {
@@ -46,6 +47,14 @@ public class Finder<T extends DomainModel<T>> implements
     @Override
     public IFindWrapper<T> byMap(Map<String, Object> map) {
         return (IFindWrapper<T>)find.byMap(map);
+    }
+
+    public IFindWrapper<T> andGroup(Consumer<ConditionGroup<T>> sub) {
+        return findWrapper.andGroup(sub);
+    }
+
+    public IFindWrapper<T> orGroup(Consumer<ConditionGroup<T>> sub) {
+        return findWrapper.orGroup(sub);
     }
 
     @Override

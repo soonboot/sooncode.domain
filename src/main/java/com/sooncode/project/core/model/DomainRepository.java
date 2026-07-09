@@ -68,7 +68,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
 
     @Override
     public void add(T entity, IGenerateReport report, boolean monitor) {
-        if (entity.stored) return;
+        if (entity.isStored()) return;
         validateEntity(entity, FuncType.add);
         String streamName = streamNameFor(entity.getClass(), entity.getId());
         if (SessionManager.contains(entity)) {
@@ -81,7 +81,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             saveSnapshot(entity);
             eventStore.createNewStream(streamName, entity.events, entity.getClass());
         }
-        entity.stored = true;
+        entity.markStored();
         try {
             if (report != null)
                 report.add(entity);
@@ -118,7 +118,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
 
     @Override
     public void save(T entity, IGenerateReport report, boolean monitor) {
-        if (entity.stored) return;
+        if (entity.isStored()) return;
         validateEntity(entity, FuncType.modify);
         T oldEntity = findByID(entity.getId(), (Class<T>) entity.getClass());
         String streamName = streamNameFor(entity.getClass(), entity.getId());
@@ -133,7 +133,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
         }
 
-        entity.stored = true;
+        entity.markStored();
         try {
             if (report != null)
                 report.modify(entity);
@@ -169,7 +169,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
 
     @Override
     public void delete(T entity, IGenerateReport report, boolean monitor) {
-        if (entity.stored) return;
+        if (entity.isStored()) return;
         validateEntity(entity, FuncType.delete);
         String streamName = streamNameFor(entity.getClass(), entity.getId());
         if (SessionManager.contains(entity)) {
@@ -182,7 +182,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             deleteSnapshot(entity);
             eventStore.invalid(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
         }
-        entity.stored = true;
+        entity.markStored();
         try {
             if (report != null)
                 report.delete(entity);

@@ -11,10 +11,17 @@ public class FindHelper{
     private HashMap<String, List<ValueType>> orMap;
     private String[] group;
     private boolean removeIsDefault;
-    FindHelper(boolean removeIsDefault){
+    /**
+     * 新条件树入口（andGroup/orGroup 使用）。
+     * 与 andMap/orMap 并存：旧 API 写 andMap/orMap，新 API 写 rootCondition。
+     * FindBuild 在 build() 时把两者翻译结果合并。
+     */
+    private ConditionNode.AndNode rootCondition;
+    public FindHelper(boolean removeIsDefault){
         andMap =new HashMap<>();
         orMap=new HashMap<>();
         this.removeIsDefault=removeIsDefault;
+        this.rootCondition = new ConditionNode.AndNode();
     }
     public void putAnd(String key, Object value, OType type){
         if(removeIsDefault&&eqDefault(value)) return;
@@ -82,7 +89,26 @@ public class FindHelper{
     public Set<Map.Entry<String, List<ValueType>>> orList(){
         return orMap.entrySet();
     }
-    public class ValueType{
+
+    /**
+     * 把已构建好的条件节点追加到 rootCondition。
+     * 仅 {@link com.sooncode.project.core.repository.mongo.FindBuild#translateField}、
+     * FindWrapper.andGroup/orGroup 内部使用。
+     */
+    public void addRootNode(ConditionNode node) {
+        if (node != null) {
+            this.rootCondition.add(node);
+        }
+    }
+
+    /**
+     * 取出 rootCondition（FindBuild 翻译用）。
+     */
+    public ConditionNode getRootCondition() {
+        return rootCondition;
+    }
+
+    public static class ValueType{
         private Object value;
         private OType type;
         public ValueType(Object value,OType type){

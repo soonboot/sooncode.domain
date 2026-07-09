@@ -3,6 +3,7 @@ package com.sooncode.project.core.finder;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 class FindWrapper<T> implements IFindWrapper<T>,IAddField<T>,IAggregate{
     private FindHelper fields;
@@ -22,6 +23,26 @@ class FindWrapper<T> implements IFindWrapper<T>,IAddField<T>,IAggregate{
     public IFindWrapper<T> and(Map<String, Object> map) {
         this.fields.putAnd(map);
         return (IFindWrapper<T>)this;
+    }
+
+    @Override
+    public IFindWrapper<T> andGroup(Consumer<ConditionGroup<T>> sub) {
+        ConditionGroupBuilder<T> builder = new ConditionGroupBuilder<>();
+        sub.accept(builder);
+        this.fields.addRootNode(builder.build());
+        return (IFindWrapper<T>) this;
+    }
+
+    @Override
+    public IFindWrapper<T> orGroup(Consumer<ConditionGroup<T>> sub) {
+        // 在根级调用 orGroup 等价于"整个查询被 OR 子组包裹"。
+        // 子 Builder 直接用 OrNode 作容器，sub 内 and()/or() 均作为 OrNode 的直接子节点，
+        // 避免再用 AndNode 包裹一层产生冗余 {$or: [{$and: [..., ...]}]}。
+        ConditionNode.OrNode orNode = new ConditionNode.OrNode();
+        ConditionGroupBuilder<T> subBuilder = new ConditionGroupBuilder<>(orNode);
+        sub.accept(subBuilder);
+        this.fields.addRootNode(orNode);
+        return (IFindWrapper<T>) this;
     }
 
     @Override

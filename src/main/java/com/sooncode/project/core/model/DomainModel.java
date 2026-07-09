@@ -308,7 +308,7 @@ public abstract class DomainModel<T> extends Entity {
     /**
      * 持久化成功后由持久层调用，重置 stored 标志。业务代码不应直接调用。
      */
-    public void markStored() {
+    void markStored() {
         this.stored = true;
     }
 
