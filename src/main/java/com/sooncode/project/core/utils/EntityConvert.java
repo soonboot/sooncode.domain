@@ -5,12 +5,6 @@ import com.sooncode.project.core.model.DomainModel;
 import com.sooncode.project.core.model.SimpleObject;
 import com.sooncode.project.core.model.ValueObject;
 import java.beans.PropertyDescriptor;
-import java.lang.reflect.Constructor;
-import java.math.BigDecimal;
-import java.math.BigInteger;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.*;
 
 public class EntityConvert{
@@ -18,24 +12,20 @@ public class EntityConvert{
         for(PropertyDescriptor property: ReflectUtils.getBeanSetters(target.getClass())) {
             if(map.containsKey(property.getName())){
                 try{
-                    Class propertyClazz=property.getPropertyType();
+                    Class<?> propertyClazz=property.getPropertyType();
                     Object obj=map.get(property.getName());
                     if(obj==null)continue;
                     if(propertyClazz.isAssignableFrom(obj.getClass())){
                         property.getWriteMethod().invoke(target,obj);
-                        continue;
                     }
-                    if(obj==null)continue;
-                    if(propertyClazz.isAssignableFrom(obj.getClass())){
-                        property.getWriteMethod().invoke(target,obj);
-                    }
-                    else if (obj!=null&&obj.toString().trim().length()>0){
+                    else if (obj.toString().trim().length()>0){
                         property.getWriteMethod().invoke(target, BaseTypeConvert.ConverTo(obj.toString(), propertyClazz));
                     }
                 }
                 catch (Exception e){
-                    e.printStackTrace();
-                    throw new DomainException("对象转换失败："+property.getName());
+                    DomainException de = new DomainException("对象转换失败："+property.getName());
+                    de.initCause(e);
+                    throw de;
                 }
             }
         }
@@ -43,7 +33,7 @@ public class EntityConvert{
     public static Map<String,Object> entityToMap(Object sourctObj){
         if(sourctObj==null) return null;
         PropertyDescriptor[] properties = ReflectUtils.getBeanGetters(sourctObj.getClass());
-        Map<String,Object> map=new HashMap<>();
+        Map<String,Object> map=new LinkedHashMap<>();
         for (PropertyDescriptor property : properties) {
             try {
                 Object o=property.getReadMethod().invoke(sourctObj);
@@ -52,23 +42,31 @@ public class EntityConvert{
                     continue;
                 }
                 else if(Map.class.isAssignableFrom(o.getClass())){
-                    Map<String,Object> objMap=(Map<String,Object>)o;
-                    for(Map.Entry<String,Object> entry : objMap.entrySet()){
+                    Map<String,Object> srcMap=(Map<String,Object>)o;
+                    Map<String,Object> newMap=new LinkedHashMap<>();
+                    for(Map.Entry<String,Object> entry : srcMap.entrySet()){
                         Object value=entry.getValue();
-                        if(value==null) continue;
-                        else if(BaseTypeConvert.isSingleValueType(value))
-                            objMap.put(entry.getKey(),value);
-                        else if(ValueObject.class.isAssignableFrom(value.getClass())
+                        if(value==null){
+                            newMap.put(entry.getKey(),null);
+                        }else if(BaseTypeConvert.isSingleValueType(value)){
+                            newMap.put(entry.getKey(),value);
+                        }else if(ValueObject.class.isAssignableFrom(value.getClass())
                             || SimpleObject.class.isAssignableFrom(value.getClass())
                             || DomainModel.class.isAssignableFrom(value.getClass())){
-                            value = entityToMap(value);
-                            objMap.put(entry.getKey(),value);
+                            newMap.put(entry.getKey(),entityToMap(value));
+                        }else if(Map.class.isAssignableFrom(value.getClass())
+                            || List.class.isAssignableFrom(value.getClass())){
+                            newMap.put(entry.getKey(),entityToMap(value));
+                        }else{
+                            newMap.put(entry.getKey(),value);
                         }
                     }
+                    o=newMap;
                 }
                 else if(List.class.isAssignableFrom(o.getClass())){
+                    List<?> srcList=(List<?>)o;
                     List<Object> newList= new ArrayList<>();
-                    for(Object value : (List<Object>)o){
+                    for(Object value : srcList){
                         if(value==null){
                             newList.add(null);
                         }else if(BaseTypeConvert.isSingleValueType(value)){
@@ -76,6 +74,9 @@ public class EntityConvert{
                         }else if(ValueObject.class.isAssignableFrom(value.getClass())
                             || SimpleObject.class.isAssignableFrom(value.getClass())
                             || DomainModel.class.isAssignableFrom(value.getClass())){
+                            newList.add(entityToMap(value));
+                        }else if(Map.class.isAssignableFrom(value.getClass())
+                            || List.class.isAssignableFrom(value.getClass())){
                             newList.add(entityToMap(value));
                         }else{
                             newList.add(value);
@@ -88,11 +89,13 @@ public class EntityConvert{
                 }
                 map.put(property.getName(),o);
             }catch(java.lang.IllegalAccessException|java.lang.reflect.InvocationTargetException e){
-                e.printStackTrace();
-                throw new DomainException("读取失败，找到同名属性："+property.getName());
+                DomainException de = new DomainException("读取失败，找到同名属性："+property.getName());
+                de.initCause(e);
+                throw de;
             }catch (Exception ex){
-                ex.printStackTrace();
-                throw new DomainException("数据转换失败："+property.getName());
+                DomainException de = new DomainException("数据转换失败："+property.getName());
+                de.initCause(ex);
+                throw de;
             }
 
         }
@@ -112,22 +115,23 @@ public class EntityConvert{
 
                 }
             }catch (java.lang.IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
-                e.printStackTrace();
-                throw new DomainException("读取或写入失败，找到同名属性：" + sourceProperty.getName());
+                DomainException de = new DomainException("读取或写入失败，找到同名属性：" + sourceProperty.getName());
+                de.initCause(e);
+                throw de;
             }
 
         }
     }
     public static void EntityToEntity(Object SourceObj,Object targetObj){
         PropertyDescriptor[] targetPropertys = ReflectUtils.getBeanSetters(targetObj.getClass());
-        PropertyDescriptor[] thisPropertys= ReflectUtils.getBeanGetters(SourceObj.getClass());
-        for (PropertyDescriptor thisProperty : thisPropertys) {
+        PropertyDescriptor[] sourceProperties= ReflectUtils.getBeanGetters(SourceObj.getClass());
+        for (PropertyDescriptor sourceProperty : sourceProperties) {
             try {
                 for (PropertyDescriptor targetPropterty : targetPropertys) {
-                    if (targetPropterty.getName().equals(thisProperty.getName())) {
+                    if (targetPropterty.getName().equals(sourceProperty.getName())) {
                         if (targetPropterty.getWriteMethod() == null) break;
                         try {
-                            Object o = thisProperty.getReadMethod().invoke(SourceObj);
+                            Object o = sourceProperty.getReadMethod().invoke(SourceObj);
                             if(o==null)break;
                             if(o.toString().trim().length()<=0)break;
                             if(targetPropterty.getPropertyType().isAssignableFrom(o.getClass())){
@@ -136,15 +140,17 @@ public class EntityConvert{
                             else
                                 targetPropterty.getWriteMethod().invoke(targetObj, BaseTypeConvert.ConverTo(o.toString(),targetPropterty.getPropertyType()));
                         } catch (java.lang.IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
-                            e.printStackTrace();
-                            throw new DomainException("读取或写入失败，找到同名属性：" + thisProperty.getName());
+                            DomainException de = new DomainException("读取或写入失败，找到同名属性：" + sourceProperty.getName());
+                            de.initCause(e);
+                            throw de;
                         }
                         break;
                     }
                 }
             }catch (Exception e){
-                e.printStackTrace();
-                throw new DomainException("数据转换失败："+thisProperty.getName());
+                DomainException de = new DomainException("数据转换失败："+sourceProperty.getName());
+                de.initCause(e);
+                throw de;
             }
         }
     }

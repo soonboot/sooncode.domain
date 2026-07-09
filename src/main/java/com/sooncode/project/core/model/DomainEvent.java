@@ -7,9 +7,9 @@ import com.sooncode.project.core.utils.BaseTypeConvert;
 import com.sooncode.project.core.utils.ReflectUtils;
 import java.beans.PropertyDescriptor;
 import java.io.Serializable;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 
@@ -18,8 +18,8 @@ import java.util.Map;
  */
 public abstract class DomainEvent implements Serializable {
     private String id;
-    private Map<String,Object> dynamicParams=new HashMap<>();
-    private final Map<String,PropertyDescriptor> properties =new HashMap<>();
+    private Map<String,Object> dynamicParams=new LinkedHashMap<>();
+    private final Map<String,PropertyDescriptor> properties =new LinkedHashMap<>();
     protected DomainEvent(){
         getFields();
     }
@@ -54,19 +54,18 @@ public abstract class DomainEvent implements Serializable {
     }
 
     private boolean checkParam(String fieldName,Map map){
-        Field field=null;
+        Field field;
         try {
             field=this.getClass().getDeclaredField(fieldName);
-        }catch (Exception e){};
-        if(field!=null){
-            if(field.isAnnotationPresent(IgnoreField.class)) {
-                map.remove(fieldName);
-                return true;
-            }
-            if(field.isAnnotationPresent(NotRequired.class))
-                return true;
+        }catch (NoSuchFieldException e){
+            throw new DomainException("字段不存在："+fieldName+" on "+this.getClass().getName());
         }
-
+        if(field.isAnnotationPresent(IgnoreField.class)) {
+            map.remove(fieldName);
+            return true;
+        }
+        if(field.isAnnotationPresent(NotRequired.class))
+            return true;
         if (!map.containsKey(fieldName)) {
             throw new DomainException("缺少参数：" + fieldName);
         }
@@ -74,11 +73,15 @@ public abstract class DomainEvent implements Serializable {
     }
     void convertParam(Entity obj){
         PropertyDescriptor[] properties= ReflectUtils.getBeanGetters(obj.getClass());
-        Map<String,Object> map=new HashMap<>();
+        Map<String,Object> map=new LinkedHashMap<>();
         for(PropertyDescriptor property:properties){
             try {
                 map.put(property.getName(),property.getReadMethod().invoke(obj));
-            }catch (Exception ex){}
+            }catch (Exception ex){
+                DomainException de = new DomainException("读取实体字段失败："+property.getName());
+                de.initCause(ex);
+                throw de;
+            }
         }
         convertParam(map);
     }
@@ -127,23 +130,19 @@ public abstract class DomainEvent implements Serializable {
         }
     }
     private void setPropertyValue(Object en,PropertyDescriptor property,Object value){
-        Class propertyType=property.getPropertyType();
+        Class<?> propertyType=property.getPropertyType();
         try{
             if(property.getWriteMethod()==null||value==null)return;
             if(propertyType.isAssignableFrom(value.getClass())){
                 property.getWriteMethod().invoke(en,value);
-                return;
             }
-            if(value==null)return;
-            if(propertyType.isAssignableFrom(value.getClass())){
-                property.getWriteMethod().invoke(en,value);
-            }
-            else if (value!=null&&value.toString().trim().length()>0){
+            else if (value.toString().trim().length()>0){
                 property.getWriteMethod().invoke(en, BaseTypeConvert.ConverTo(value.toString(), propertyType));
             }
         }catch (Exception ex){
-            ex.printStackTrace();
-            throw new DomainException("对象转换失败："+value+" to "+property.getName());
+            DomainException de = new DomainException("对象转换失败："+value+" to "+property.getName());
+            de.initCause(ex);
+            throw de;
         }
     }
     public Object get(String fieldName){
@@ -151,7 +150,11 @@ public abstract class DomainEvent implements Serializable {
         if(properties.containsKey(fieldName)){
             try {
                 value= properties.get(fieldName).getReadMethod().invoke(this);
-            }catch (Exception e){}
+            }catch (Exception e){
+                DomainException de = new DomainException("读取事件字段失败："+fieldName);
+                de.initCause(e);
+                throw de;
+            }
         }
         else {
             value=this.dynamicParams.get(fieldName);
@@ -169,10 +172,12 @@ public abstract class DomainEvent implements Serializable {
         this.id = id;
     }
     public Map<String, Object> getDynamicParams() {
-        return dynamicParams;
+        return Collections.unmodifiableMap(dynamicParams);
     }
 
-    public void setDynamicParams(HashMap<String, Object> dynamicParams) {
-        this.dynamicParams = dynamicParams;
+    public void setDynamicParams(Map<String, Object> dynamicParams) {
+        this.dynamicParams = dynamicParams == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(dynamicParams);
     }
 }
