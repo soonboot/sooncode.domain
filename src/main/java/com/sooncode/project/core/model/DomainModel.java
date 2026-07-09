@@ -91,8 +91,8 @@ public abstract class DomainModel<T> extends Entity {
     }
     protected void beforeAdd(DomainEvent event){};
     protected void afterAdd(DomainEvent event){};
-    public void beforeUpdate(DomainEvent event){};
-    public void afterUpdate(DomainEvent event){};
+    protected void beforeUpdate(DomainEvent event){};
+    protected void afterUpdate(DomainEvent event){};
     protected void beforeDelete(DomainEvent event){};
     protected void afterDelete(DomainEvent event){};
     protected void beforeStore(DomainEvent event){};
