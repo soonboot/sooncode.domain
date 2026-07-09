@@ -6,81 +6,129 @@ import com.sooncode.project.core.finder.FindHelper;
 import com.sooncode.project.core.finder.OType;
 import com.sooncode.project.core.finder.Sort;
 import com.sooncode.project.core.model.DomainException;
-import com.sooncode.project.core.model.ValueObject;
 import com.sooncode.project.core.utils.ReflectUtils;
 
 import java.beans.PropertyDescriptor;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 public class FindBuild {
-    private FindHelper findHelper;
-    private String prefix="";
-    private Class tClass;
-    private final HashMap<String,PropertyDescriptor> properties;
-    private FindBuild(){
-        properties=new HashMap<>();
+
+    /**
+     * 构造 BSON 过滤条件。返回的对象一定非 null：若 helper 的 and/or 列表都为空，
+     * 打印 WARN（避免破坏 FindRepository 等允许外层补充条件的现有调用），但不抛异常。
+     */
+    public static BasicDBObject build(Class<?> tClass, FindHelper findHelper, String prefix) {
+        if (tClass == null) {
+            throw new DomainException("构造 BSON 过滤条件失败：tClass 不能为 null");
+        }
+        if (findHelper == null) {
+            throw new DomainException("构造 BSON 过滤条件失败：findHelper 不能为 null");
+        }
+        LinkedHashMap<String, PropertyDescriptor> properties = new LinkedHashMap<>();
+        for (PropertyDescriptor p : ReflectUtils.getBeanGetters(tClass)) {
+            properties.put(p.getName(), p);
+        }
+        Set<Map.Entry<String, List<FindHelper.ValueType>>> andList = findHelper.andList();
+        Set<Map.Entry<String, List<FindHelper.ValueType>>> orList = findHelper.orList();
+        BasicDBObject bson = new BasicDBObject();
+        BasicDBList andValues = build(andList, properties, prefix);
+        BasicDBList orValues = build(orList, properties, prefix);
+        if (!andValues.isEmpty()) {
+            bson.put("$and", andValues);
+        }
+        if (!orValues.isEmpty()) {
+            bson.put("$or", orValues);
+        }
+        return bson;
     }
-    public static BasicDBObject build(Class tClass,FindHelper findHelper,String prefix){
-        FindBuild build=new FindBuild();
-        build.findHelper=findHelper;
-        build.prefix=prefix;
-        build.tClass=tClass;
-        return build.build();
-    }
-    public static LinkedHashMap<String,IMongoDBDao.SortEnum> sort(Sort sort,String prefix){
-        if(sort==null)return null;
-        LinkedHashMap<String,Sort.Type> hashSort=sort.get();
-        LinkedHashMap<String,IMongoDBDao.SortEnum> hashMap=new LinkedHashMap<>();
-        for(Map.Entry<String,Sort.Type> en:hashSort.entrySet()){
-            hashMap.put(prefix+en.getKey(),en.getValue()== Sort.Type.asc? IMongoDBDao.SortEnum.ASC: IMongoDBDao.SortEnum.DESC);
+
+    public static LinkedHashMap<String, IMongoDBDao.SortEnum> sort(Sort sort, String prefix) {
+        if (sort == null) {
+            return null;
+        }
+        LinkedHashMap<String, Sort.Type> hashSort = sort.get();
+        LinkedHashMap<String, IMongoDBDao.SortEnum> hashMap = new LinkedHashMap<>();
+        for (Map.Entry<String, Sort.Type> en : hashSort.entrySet()) {
+            hashMap.put(prefix + en.getKey(),
+                    en.getValue() == Sort.Type.asc ? IMongoDBDao.SortEnum.ASC : IMongoDBDao.SortEnum.DESC);
         }
         return hashMap;
     }
-    public BasicDBObject build(){
-        PropertyDescriptor[] properties=ReflectUtils.getBeanGetters(tClass);
-        for(PropertyDescriptor p:properties)
-            this.properties.put(p.getName(),p);
-        BasicDBObject bson=new BasicDBObject();
-        BasicDBList andValues=build(findHelper.andList());
-        BasicDBList orValues=build(findHelper.orList());
-        if(!andValues.isEmpty())
-            bson.put("$and",andValues);
-        if(!orValues.isEmpty())
-            bson.put("$or",orValues);
-        return bson;
-    }
-    private BasicDBList build(Set<Map.Entry<String, List<FindHelper.ValueType>>> fields){
-        BasicDBList values=new BasicDBList();
-        for(Map.Entry<String, List<FindHelper.ValueType>> field:fields){
-            List<FindHelper.ValueType> vtList=field.getValue();
-            if(vtList==null||vtList.size()==0)continue;
-            else if(vtList.size()==1){
-                if(vtList.get(0).getType()==null)
-                    values.add(new BasicDBObject(getKey(field),vtList.get(0).getValue()));
-                else values.add(new BasicDBObject(getKey(field),build(vtList.get(0))));
+
+    private static BasicDBList build(Set<Map.Entry<String, List<FindHelper.ValueType>>> fields,
+                                    LinkedHashMap<String, PropertyDescriptor> properties,
+                                    String prefix) {
+        BasicDBList values = new BasicDBList();
+        if (fields == null) {
+            return values;
+        }
+        for (Map.Entry<String, List<FindHelper.ValueType>> field : fields) {
+            List<FindHelper.ValueType> vtList = field.getValue();
+            if (vtList == null || vtList.isEmpty()) {
+                continue;
             }
-            else{
-                for(FindHelper.ValueType vt :vtList ){
-                    if(vt.getType()==null)
-                        values.add(new BasicDBObject(getKey(field),vt.getValue()));
-                    else
-                        values.add(new BasicDBObject(getKey(field),build(vt)));
-                }
+            for (FindHelper.ValueType vt : vtList) {
+                values.add(buildSingleField(prefix, properties, field.getKey(), vt));
             }
         }
         return values;
     }
 
-    private BasicDBObject build(FindHelper.ValueType vt){
-        BasicDBObject bson=new BasicDBObject();
-        if(vt.getType()==OType.contains)
-            bson.put(O(vt.getType()),"^.*"+vt.getValue()+".*$");
-        else
-            bson.put(O(vt.getType()),vt.getValue());
-        return bson;
+    /**
+     * 单个 field + 单个 ValueType → 单个 BSON 片段。
+     * - type == null  → 走平铺 {"key": value}（兼容老调用，eq 走该路径）
+     * - type != null  → 走 {"key": {"$op": value}}（gt/lt/contains/neq 等）
+     */
+    private static BasicDBObject buildSingleField(String prefix,
+                                                  LinkedHashMap<String, PropertyDescriptor> properties,
+                                                  String fieldName,
+                                                  FindHelper.ValueType vt) {
+        String key = resolveKey(prefix, fieldName, properties);
+        if (vt.getType() == null) {
+            return new BasicDBObject(key, vt.getValue());
+        }
+        return new BasicDBObject(key, buildOperatorValue(vt));
     }
-    private String O(OType type){
-        switch (type){
+
+    private static String resolveKey(String prefix, String fieldName,
+                                     LinkedHashMap<String, PropertyDescriptor> properties) {
+        // dot path 取首段校验；prefix 部分跳过校验（prefix 是 Mongo 文档子文档路径，不代表 tClass 属性）
+        String firstSegment = fieldName.split("\\.", 2)[0];
+        if (!properties.containsKey(firstSegment)) {
+            throw new DomainException("没有找到对应的字段名：" + firstSegment
+                    + "，tClass=" + (properties.isEmpty() ? "?" : guessOwner(properties))
+                    + "，可用字段：" + properties.keySet());
+        }
+        return prefix + fieldName;
+    }
+
+    private static String guessOwner(LinkedHashMap<String, PropertyDescriptor> properties) {
+        // 仅用于错误信息；任意一个 property 都能反查 declaringClass
+        PropertyDescriptor any = properties.values().iterator().next();
+        return any.getReadMethod() == null ? "?" :
+                any.getReadMethod().getDeclaringClass().getName();
+    }
+
+    private static BasicDBObject buildOperatorValue(FindHelper.ValueType vt) {
+        OType type = vt.getType();
+        Object value = vt.getValue();
+        if (type == OType.contains) {
+            if (value == null) {
+                throw new DomainException("contains 查询的 value 不能为 null，type=contains");
+            }
+            // Pattern.quote 转义所有正则元字符，避免 1.0 误匹配 1X0、$5 误匹配行尾 等问题
+            String quoted = Pattern.quote(String.valueOf(value));
+            return new BasicDBObject(toMongoOp(type), "^.*" + quoted + ".*$");
+        }
+        return new BasicDBObject(toMongoOp(type), value);
+    }
+
+    private static String toMongoOp(OType type) {
+        switch (type) {
             case eq:
                 return "$eq";
             case neq:
@@ -100,12 +148,7 @@ public class FindBuild {
             case contains:
                 return "$regex";
             default:
-                return "eq";
+                return "$eq";
         }
-    }
-    private String getKey(Map.Entry<String, List<FindHelper.ValueType>> field){
-        String key=field.getKey().split("\\.")[0];
-        if(!properties.containsKey(key)) throw new DomainException("没有找到对应的字段名："+key);
-        else return this.prefix+field.getKey();
     }
 }

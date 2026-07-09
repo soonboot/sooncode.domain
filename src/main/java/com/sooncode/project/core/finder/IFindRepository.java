@@ -7,7 +7,7 @@ public interface IFindRepository<T> {
     T first(FindHelper findHelper,Sort sort);
     List<T> list(FindHelper findHelper,Sort sort);
     List<T> top(FindHelper findHelper,int num,Sort sort);
-    Page<T> page(FindHelper findHelper,int pageSize,int pageindex,Sort sort);
+    Page<T> page(FindHelper findHelper, int pageSize, int pageIndex, Sort sort);
     long count(FindHelper findHelper);
     Map<String,Long> count(FindHelper findHelper,String[] groupField);
     Map<String,T> map(FindHelper findHelper,String fieldKey);

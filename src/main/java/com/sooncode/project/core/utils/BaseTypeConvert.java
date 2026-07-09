@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.text.DateFormat;
 import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -14,50 +15,75 @@ import java.util.*;
 import static com.sooncode.project.core.utils.DatePattern.PARSE_PATTERNS;
 
 public class BaseTypeConvert {
-    public static Object ConverTo(String o,Class clazz) throws ParseException {
-        if (String.class.equals(clazz)) {
-            return o;
-        }else if(Integer.class.equals(clazz)||int.class.equals(clazz)){
-            return Integer.parseInt(o);
-        }
-        else if(Long.class.equals(clazz)||long.class.equals(clazz)){
-            return Long.parseLong(o);
-        }
-        else if(Float.class.equals(clazz)||float.class.equals(clazz)){
-            return Float.parseFloat(o);
-        }
-        else if(Double.class.equals(clazz)||double.class.equals(clazz)){
-            return Double.parseDouble(o);
-        }
-        else if(BigDecimal.class.equals(clazz)){
-            return new BigDecimal(o);
-        }
-        else if(BigInteger.class.equals(clazz)){
-            return new BigInteger(o);
-        }
-        else if(clazz.isEnum()){
-            return convertToEnum(o,clazz);
-        }
-        else if(Boolean.class.equals(clazz)||boolean.class.equals(clazz)){
-            return Boolean.parseBoolean(o);
-        }
-        else if(Date.class.equals(clazz)){
-            return DateUtils.parseDate(o, PARSE_PATTERNS);
-        }
-        else if(LocalDate.class.equals(clazz)){
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-            return LocalDate.parse(o, formatter);
-        }
-        else if(LocalTime.class.equals(clazz)){
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss");
-            return LocalTime.parse(o, formatter);
-        }
-        else if(LocalDateTime.class.equals(clazz)){
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-            return LocalDateTime.parse(o, formatter);
-        }
-        else return o;
+
+    /**
+     * 旧 API 入口：仅支持 String → 目标类型。委托给 {@link #convertValue(Object, Class)}。
+     */
+    public static Object ConverTo(String o, Class clazz) throws ParseException {
+        return convertValue(o, clazz);
     }
+
+    /**
+     * 通用类型转换：支持 String、Date、LocalDateTime、LocalDate、LocalTime、Boolean、Number 等
+     * 常见值类型之间互转。
+     */
+    public static Object convertValue(Object value, Class<?> targetType) throws ParseException {
+        if (value == null) {
+            return null;
+        }
+        // 同类型直接返回
+        if (targetType.isInstance(value)) {
+            return value;
+        }
+        // 目标为 String
+        if (targetType == String.class) {
+            if (value instanceof Date) {
+                return new SimpleDateFormat(DatePattern.DATETIME).format((Date) value);
+            }
+            return value.toString();
+        }
+        // 目标为基础类型 / 包装类 / BigDecimal / BigInteger / Enum / Boolean / Date / Local* —— 全部就地展开解析
+        String s = value.toString();
+        if (targetType == Integer.class || targetType == int.class) {
+            return Integer.parseInt(s);
+        }
+        if (targetType == Long.class || targetType == long.class) {
+            return Long.parseLong(s);
+        }
+        if (targetType == Float.class || targetType == float.class) {
+            return Float.parseFloat(s);
+        }
+        if (targetType == Double.class || targetType == double.class) {
+            return Double.parseDouble(s);
+        }
+        if (targetType == BigDecimal.class) {
+            return new BigDecimal(s);
+        }
+        if (targetType == BigInteger.class) {
+            return new BigInteger(s);
+        }
+        if (targetType.isEnum()) {
+            return convertToEnum(s, targetType);
+        }
+        if (targetType == Boolean.class || targetType == boolean.class) {
+            return Boolean.parseBoolean(s);
+        }
+        if (targetType == Date.class) {
+            return DateUtils.parseDate(s, PARSE_PATTERNS);
+        }
+        if (targetType == LocalDate.class) {
+            return LocalDate.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+        }
+        if (targetType == LocalTime.class) {
+            return LocalTime.parse(s, DateTimeFormatter.ofPattern("HH:mm:ss"));
+        }
+        if (targetType == LocalDateTime.class) {
+            return LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        }
+        // 兜底：未知类型原样返回
+        return value;
+    }
+
     public static Object def(Class clazz){
         if(defMap.containsKey(clazz)) return defMap.get(clazz);
         if(clazz != null && clazz.isEnum()) return null;
