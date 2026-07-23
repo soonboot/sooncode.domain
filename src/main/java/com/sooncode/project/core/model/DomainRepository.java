@@ -1,5 +1,6 @@
 package com.sooncode.project.core.model;
 
+import com.sooncode.project.core.annotations.SkipEventSourcing;
 import com.sooncode.project.core.finder.Page;
 import com.sooncode.project.core.monitor.FuncType;
 import com.sooncode.project.core.monitor.Monitor;
@@ -71,15 +72,20 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (entity.isStored()) return;
         validateEntity(entity, FuncType.add);
         String streamName = streamNameFor(entity.getClass(), entity.getId());
+        boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
             session.setSessionFunction(() -> {
                 saveSnapshot(entity);
-                eventStore.createNewStream(streamName, entity.events, entity.getClass());
+                if (!skipES) {
+                    eventStore.createNewStream(streamName, entity.events, entity.getClass());
+                }
             });
         } else {
             saveSnapshot(entity);
-            eventStore.createNewStream(streamName, entity.events, entity.getClass());
+            if (!skipES) {
+                eventStore.createNewStream(streamName, entity.events, entity.getClass());
+            }
         }
         entity.markStored();
         try {
@@ -122,15 +128,20 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         validateEntity(entity, FuncType.modify);
         T oldEntity = findByID(entity.getId(), (Class<T>) entity.getClass());
         String streamName = streamNameFor(entity.getClass(), entity.getId());
+        boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
             session.setSessionFunction(() -> {
                 saveSnapshot(entity);
-                eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+                if (!skipES) {
+                    eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+                }
             });
         } else {
             saveSnapshot(entity);
-            eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+            if (!skipES) {
+                eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+            }
         }
 
         entity.markStored();
@@ -172,15 +183,20 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (entity.isStored()) return;
         validateEntity(entity, FuncType.delete);
         String streamName = streamNameFor(entity.getClass(), entity.getId());
+        boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
             session.setSessionFunction(() -> {
                 deleteSnapshot(entity);
-                eventStore.invalid(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+                if (!skipES) {
+                    eventStore.invalid(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+                }
             });
         } else {
             deleteSnapshot(entity);
-            eventStore.invalid(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+            if (!skipES) {
+                eventStore.invalid(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+            }
         }
         entity.markStored();
         try {
@@ -238,6 +254,18 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
                 ex.printStackTrace();
                 return null;
             }
+        }
+        // 跳过事件溯源的实体：仅返回快照，不再拉取事件流
+        if (isSkipEventSourcing(entity)) {
+            if (Monitor.instance != null) {
+                try {
+                    Monitor.instance.Notice((T) entity, FuncType.replay);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    throw ex;
+                }
+            }
+            return entity;
         }
         List<DomainEvent> events = eventStore.getStream(streamName, fromEventNumber, toEventNumber);
         ((DomainModel<T>) entity).replay(events, fromEventNumber, toEventNumber);
@@ -301,5 +329,14 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             if (exception != null)
                 throw exception;
         }
+    }
+
+    /**
+     * 判断实体是否标记了 {@link SkipEventSourcing} 且 value() == true。
+     * 无注解或注解 value() == false → 走完整 ES。
+     */
+    private boolean isSkipEventSourcing(DomainModel entity) {
+        SkipEventSourcing ann = entity.getClass().getAnnotation(SkipEventSourcing.class);
+        return ann != null && ann.value();
     }
 }
