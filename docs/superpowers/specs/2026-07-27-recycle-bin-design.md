@@ -18,12 +18,13 @@ DomainRepository.delete(entity)
 ### 恢复时
 
 ```
-T entity = DomainRepository.restore(streamId)
+T entity = DomainRepository.restore(entityId, tClass)
+  → 内部拼装 streamId = "tClass.name-entityId"
   → 从 recycleBin 集合读取完整的 snapshot document
   → 写回原 snapshot 集合（恢复快照）
   → 重新激活 event stream（metadata.isInvalid = 0）
   → 从 recycleBin 删除该记录
-  → 返回恢复后的实体
+  → 反序列化 snapshotDoc.snapshot 并返回实体
 ```
 
 ## 新增文件
@@ -38,16 +39,19 @@ MongoDB 操作类，直接基于 `IMongoDBDao`，集合名为 `"recycleBin"`。
 {
   "_id": ObjectId,
   "streamId": "com.example.User-abc123",
+  "entityId": "abc123",
   "entityType": "com.example.User",
   "snapshotDoc": { ... 完整的原 snapshot document ... },
   "deleteTime": ISODate
 }
 ```
 
+首次写入时创建索引 `streamId`（唯一）、`entityType`、`deleteTime`（降序），`createIndex` 幂等。
+
 方法：
 | 方法 | 说明 |
 |------|------|
-| `save(entityClass, streamId)` | 从原 snapshot 集合读取完整 doc 并写入回收站，内部通过 `@ModelSnapshot` 解析集合名 |
+| `save(entityClass, streamId, entityId)` | 从原 snapshot 集合读取完整 doc 并写入回收站，内部通过 `@ModelSnapshot` 解析集合名 |
 | `findByStreamId(streamId)` | 查询回收站中指定 streamId 的记录 |
 | `listByEntityType(entityType, pageIndex, pageSize)` | 分页查询某类型的删除记录 |
 | `countByEntityType(entityType)` | 统计某类型的删除数量 |
@@ -63,6 +67,7 @@ MongoDB 操作类，直接基于 `IMongoDBDao`，集合名为 `"recycleBin"`。
 public class RecycleBinRecord {
     private String id;
     private String streamId;
+    private String entityId;
     private String entityType;
     private Map<String, Object> snapshotDoc;
     private Date deleteTime;
@@ -110,7 +115,7 @@ public void reactivate(String streamName) {
 
 1. **新增字段** `RecycleBinRepository recycleBinRepository`（通过 setter 注入，非必需，向后兼容）
 2. **`delete(T, report, monitor)`** — 在 `deleteSnapshot` 之前调用 `saveToRecycleBin()`
-3. **`restore(streamId, tClass)`** — 恢复删除的实体，返回恢复后的 `T`
+3. **`restore(entityId, tClass)`** — 恢复删除的实体，内部拼装 streamId，返回恢复后的 `T`
 4. **`listTrash(tClass, page, size)`** / **`countTrash(tClass)`** — 查询回收站
 5. **`listAllTrash(page, size)`** / **`countAllTrash()`** — 全部回收站记录
 
