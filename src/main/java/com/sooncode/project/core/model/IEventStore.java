@@ -13,6 +13,7 @@ public interface IEventStore {
     void appendEventToStream(String streamName,List<DomainEvent> domainEvents,Integer expectedVersion,Class<?> cla);
     void appendEventToStream(String streamName,List<DomainEvent> domainEvents,Class<?> cla);
     void invalid(String streamName,List<DomainEvent> domainEvents,Integer expectedVersion,Class<?> cla);
+    void reactivate(String streamName);
     List<DomainEvent> getStream(String streamName,int fromVersion,int toVersion);
     Page<EventWrapper> getStream(String modelType, String eventType, String creater, int pageSize, int pageIndex);
     void saveSnapshot(String id , Entity snapshot);

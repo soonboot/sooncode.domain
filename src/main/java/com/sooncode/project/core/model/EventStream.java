@@ -89,6 +89,11 @@ public class EventStream {
         return this;
     }
 
+    public EventStream Valid(){
+        setIsInvalid(0);
+        return this;
+    }
+
 
     /**
      * 注册事件, 注册事件会生成事件包装器, 方便对事件流进行存储

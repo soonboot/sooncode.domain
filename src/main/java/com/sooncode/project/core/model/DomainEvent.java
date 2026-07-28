@@ -257,9 +257,9 @@ public abstract class DomainEvent implements Serializable {
         }
         if (eb.KeepAll()) {
             // 动态参数不在事件实字段中，projectiveEntity 不会回写到聚合根。
-            System.err.println("[DomainEvent WARN] 字段 " + fieldName
-                    + " 不在 " + this.getClass().getSimpleName()
-                    + " 的实字段中，将以 dynamicParams 形式保存，但不会回写到聚合根。");
+//            System.err.println("[DomainEvent WARN] 字段 " + fieldName
+//                    + " 不在 " + this.getClass().getSimpleName()
+//                    + " 的实字段中，将以 dynamicParams 形式保存，但不会回写到聚合根。");
             this.dynamicParams.put(fieldName, value);
             return;
         }

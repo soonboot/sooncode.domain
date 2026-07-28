@@ -52,6 +52,15 @@ public class EventStore implements IEventStore {
     }
 
     @Override
+    public void reactivate(String streamName) {
+        EventStream eventStream = _repository.loadMetadata(streamName);
+        if (eventStream == null)
+            throw new DomainException("没有找到元数据:" + streamName);
+        eventStream.Valid();
+        _repository.updateMetadata(eventStream);
+    }
+
+    @Override
     public List<DomainEvent> getStream(String streamName, int fromVersion, int toVersion) {
         List<EventWrapper> eventWrappers=_repository.getStream(streamName,fromVersion,toVersion);
         if(eventWrappers.size()==0) return null;
