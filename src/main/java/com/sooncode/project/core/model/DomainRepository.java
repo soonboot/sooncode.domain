@@ -9,8 +9,14 @@ import com.sooncode.project.core.session.SessionManager;
 import com.sooncode.project.core.validator.IValidate;
 import com.sooncode.project.core.validator.ModelValidateFailException;
 
+import com.alibaba.fastjson.JSONObject;
+import com.sooncode.project.core.recycle.RecycleBinRecord;
+import com.sooncode.project.core.recycle.RecycleBinRepository;
+import org.bson.Document;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 领域模型存储库实现类
@@ -19,6 +25,11 @@ import java.util.List;
  */
 public class DomainRepository<T extends DomainModel> implements IDomainRepository<T> {
     protected IEventStore eventStore;
+    protected RecycleBinRepository recycleBinRepository;
+
+    public void setRecycleBinRepository(RecycleBinRepository recycleBinRepository) {
+        this.recycleBinRepository = recycleBinRepository;
+    }
 
     /**
      * 构造器
@@ -183,6 +194,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (entity.isStored()) return;
         validateEntity(entity, FuncType.delete);
         String streamName = streamNameFor(entity.getClass(), entity.getId());
+        saveToRecycleBin(entity, streamName);
         boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
@@ -312,6 +324,74 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             result.add(entity);
         }
         return result;
+    }
+
+    private void saveToRecycleBin(T entity, String streamName) {
+        if (recycleBinRepository == null) return;
+        recycleBinRepository.save(entity.getClass(), streamName, entity.getId());
+    }
+
+    public T restore(String entityId, Class<T> tClass) {
+        if (recycleBinRepository == null)
+            throw new DomainException("RecycleBinRepository not configured");
+        String streamName = streamNameFor(tClass, entityId);
+        Document snapshotDoc = recycleBinRepository.restoreSnapshot(streamName, tClass);
+        if (snapshotDoc == null)
+            throw new DomainException("回收站未找到数据:" + streamName);
+        eventStore.reactivate(streamName);
+        Document snapshot = (Document) snapshotDoc.get("snapshot");
+        if (snapshot == null)
+            throw new DomainException("回收站快照数据异常:" + streamName);
+        JSONObject jsonObject = new JSONObject(snapshot);
+        return (T) jsonObject.toJavaObject(tClass);
+    }
+
+    public Page<RecycleBinRecord> listTrash(Class<T> tClass, int pageIndex, int pageSize) {
+        if (recycleBinRepository == null)
+            throw new DomainException("RecycleBinRepository not configured");
+        String entityType = tClass.getName();
+        List<Document> docs = recycleBinRepository.listByEntityType(entityType, pageIndex, pageSize);
+        long total = recycleBinRepository.countByEntityType(entityType);
+        return buildTrashPage(docs, total, pageIndex, pageSize);
+    }
+
+    public long countTrash(Class<T> tClass) {
+        if (recycleBinRepository == null)
+            throw new DomainException("RecycleBinRepository not configured");
+        return recycleBinRepository.countByEntityType(tClass.getName());
+    }
+
+    public Page<RecycleBinRecord> listAllTrash(int pageIndex, int pageSize) {
+        if (recycleBinRepository == null)
+            throw new DomainException("RecycleBinRepository not configured");
+        List<Document> docs = recycleBinRepository.listAll(pageIndex, pageSize);
+        long total = recycleBinRepository.countAll();
+        return buildTrashPage(docs, total, pageIndex, pageSize);
+    }
+
+    public long countAllTrash() {
+        if (recycleBinRepository == null)
+            throw new DomainException("RecycleBinRepository not configured");
+        return recycleBinRepository.countAll();
+    }
+
+    private Page<RecycleBinRecord> buildTrashPage(List<Document> docs, long total, int pageIndex, int pageSize) {
+        List<RecycleBinRecord> records = new ArrayList<>();
+        for (Document doc : docs) {
+            RecycleBinRecord record = new RecycleBinRecord();
+            record.setStreamId(doc.getString("streamId"));
+            record.setEntityId(doc.getString("entityId"));
+            record.setEntityType(doc.getString("entityType"));
+            record.setSnapshotDoc((Map) doc.get("snapshotDoc"));
+            record.setDeleteTime(doc.getDate("deleteTime"));
+            records.add(record);
+        }
+        Page<RecycleBinRecord> page = new Page<>();
+        page.setTotalElements(total);
+        page.setPageIndex(pageIndex);
+        page.setPageSize(pageSize);
+        page.setContent(records);
+        return page;
     }
 
     private Integer getExpectedVersion(int startVersion) {
