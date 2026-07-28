@@ -335,15 +335,19 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (recycleBinRepository == null)
             throw new DomainException("RecycleBinRepository not configured");
         String streamName = streamNameFor(tClass, entityId);
-        Document snapshotDoc = recycleBinRepository.restoreSnapshot(streamName, tClass);
-        if (snapshotDoc == null)
+        Document recycleDoc = recycleBinRepository.findByStreamId(streamName);
+        if (recycleDoc == null)
             throw new DomainException("回收站未找到数据:" + streamName);
+        Document snapshotDoc = (Document) recycleDoc.get("snapshotDoc");
         eventStore.reactivate(streamName);
+        recycleBinRepository.restoreSnapshot(streamName, tClass);
         Document snapshot = (Document) snapshotDoc.get("snapshot");
         if (snapshot == null)
             throw new DomainException("回收站快照数据异常:" + streamName);
         JSONObject jsonObject = new JSONObject(snapshot);
-        return (T) jsonObject.toJavaObject(tClass);
+        T entity = (T) jsonObject.toJavaObject(tClass);
+        entity.markStored();
+        return entity;
     }
 
     public Page<RecycleBinRecord> listTrash(Class<T> tClass, int pageIndex, int pageSize) {
@@ -379,10 +383,11 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         List<RecycleBinRecord> records = new ArrayList<>();
         for (Document doc : docs) {
             RecycleBinRecord record = new RecycleBinRecord();
+            record.setId(doc.getObjectId("_id").toHexString());
             record.setStreamId(doc.getString("streamId"));
             record.setEntityId(doc.getString("entityId"));
             record.setEntityType(doc.getString("entityType"));
-            record.setSnapshotDoc((Map) doc.get("snapshotDoc"));
+            record.setSnapshotDoc((Map<String, Object>) doc.get("snapshotDoc"));
             record.setDeleteTime(doc.getDate("deleteTime"));
             records.add(record);
         }

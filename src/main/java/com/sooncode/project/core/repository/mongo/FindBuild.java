@@ -65,9 +65,9 @@ public class FindBuild {
         }
         if (!oldPathUsed && (andValues.isEmpty() && orValues.isEmpty())
                 && (rootCondition == null || ((ConditionNode.AndNode) rootCondition).children.isEmpty())) {
-//            System.err.println("[FindBuild WARN] findHelper 的 and/or 列表都为空，"
-//                    + "将产生空 BSON 条件（Mongo 会匹配全部文档，注意全表扫描风险）。tClass="
-//                    + tClass.getName() + "，prefix=" + prefix);
+            System.err.println("[FindBuild WARN] findHelper 的 and/or 列表都为空，"
+                    + "将产生空 BSON 条件（Mongo 会匹配全部文档，注意全表扫描风险）。tClass="
+                    + tClass.getName() + "，prefix=" + prefix);
         }
         return bson;
     }
