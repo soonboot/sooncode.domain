@@ -18,11 +18,12 @@ DomainRepository.delete(entity)
 ### 恢复时
 
 ```
-DomainRepository.restore(streamId)
+T entity = DomainRepository.restore(streamId)
   → 从 recycleBin 集合读取完整的 snapshot document
   → 写回原 snapshot 集合（恢复快照）
   → 重新激活 event stream（metadata.isInvalid = 0）
   → 从 recycleBin 删除该记录
+  → 返回恢复后的实体
 ```
 
 ## 新增文件
@@ -46,7 +47,7 @@ MongoDB 操作类，直接基于 `IMongoDBDao`，集合名为 `"recycleBin"`。
 方法：
 | 方法 | 说明 |
 |------|------|
-| `save(originalCollection, streamId, entityType)` | 从原 snapshot 集合读取完整 doc 并写入回收站 |
+| `save(entityClass, streamId)` | 从原 snapshot 集合读取完整 doc 并写入回收站，内部通过 `@ModelSnapshot` 解析集合名 |
 | `findByStreamId(streamId)` | 查询回收站中指定 streamId 的记录 |
 | `listByEntityType(entityType, pageIndex, pageSize)` | 分页查询某类型的删除记录 |
 | `countByEntityType(entityType)` | 统计某类型的删除数量 |
@@ -63,7 +64,7 @@ public class RecycleBinRecord {
     private String id;
     private String streamId;
     private String entityType;
-    private Document snapshotDoc;
+    private Map<String, Object> snapshotDoc;
     private Date deleteTime;
 }
 ```
@@ -109,21 +110,13 @@ public void reactivate(String streamName) {
 
 1. **新增字段** `RecycleBinRepository recycleBinRepository`（通过 setter 注入，非必需，向后兼容）
 2. **`delete(T, report, monitor)`** — 在 `deleteSnapshot` 之前调用 `saveToRecycleBin()`
-3. **`restore(streamId, tClass)`** — 恢复删除的实体
+3. **`restore(streamId, tClass)`** — 恢复删除的实体，返回恢复后的 `T`
 4. **`listTrash(tClass, page, size)`** / **`countTrash(tClass)`** — 查询回收站
 5. **`listAllTrash(page, size)`** / **`countAllTrash()`** — 全部回收站记录
 
 ### `model/IDomainRepository.java`
 
-新增接口方法：
-
-```java
-void restore(String streamId, Class<T> tClass);
-Page<RecycleBinRecord> listTrash(Class<T> tClass, int pageIndex, int pageSize);
-long countTrash(Class<T> tClass);
-Page<RecycleBinRecord> listAllTrash(int pageIndex, int pageSize);
-long countAllTrash();
-```
+不修改。新方法仅添加到 `DomainRepository`，不引入接口变更。
 
 ## 不变的部分
 
