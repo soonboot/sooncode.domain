@@ -10,8 +10,9 @@ import com.sooncode.project.core.validator.IValidate;
 import com.sooncode.project.core.validator.ModelValidateFailException;
 
 import com.alibaba.fastjson.JSONObject;
+import com.sooncode.project.core.recycle.IRecycleBinRepository;
 import com.sooncode.project.core.recycle.RecycleBinRecord;
-import com.sooncode.project.core.recycle.RecycleBinRepository;
+import com.sooncode.project.core.repository.mongo.MongoRecycleBinRepository;
 import org.bson.Document;
 
 import java.util.ArrayList;
@@ -25,9 +26,9 @@ import java.util.Map;
  */
 public class DomainRepository<T extends DomainModel> implements IDomainRepository<T> {
     protected IEventStore eventStore;
-    protected RecycleBinRepository recycleBinRepository;
+    protected IRecycleBinRepository recycleBinRepository;
 
-    public void setRecycleBinRepository(RecycleBinRepository recycleBinRepository) {
+    public void setRecycleBinRepository(IRecycleBinRepository recycleBinRepository) {
         this.recycleBinRepository = recycleBinRepository;
     }
 
@@ -327,21 +328,23 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
     }
 
     private void saveToRecycleBin(T entity, String streamName) {
+        ensureRecycleBinRepository();
         if (recycleBinRepository == null) return;
         recycleBinRepository.save(entity.getClass(), streamName, entity.getId());
     }
 
     public T restore(String entityId, Class<T> tClass) {
+        ensureRecycleBinRepository();
         if (recycleBinRepository == null)
             throw new DomainException("RecycleBinRepository not configured");
         String streamName = streamNameFor(tClass, entityId);
-        Document recycleDoc = recycleBinRepository.findByStreamId(streamName);
+        Map<String, Object> recycleDoc = recycleBinRepository.findByStreamId(streamName);
         if (recycleDoc == null)
             throw new DomainException("回收站未找到数据:" + streamName);
-        Document snapshotDoc = (Document) recycleDoc.get("snapshotDoc");
+        Map<String, Object> snapshotDoc = (Map<String, Object>) recycleDoc.get("snapshotDoc");
         eventStore.reactivate(streamName);
         recycleBinRepository.restoreSnapshot(streamName, tClass);
-        Document snapshot = (Document) snapshotDoc.get("snapshot");
+        Map<String, Object> snapshot = (Map<String, Object>) snapshotDoc.get("snapshot");
         if (snapshot == null)
             throw new DomainException("回收站快照数据异常:" + streamName);
         JSONObject jsonObject = new JSONObject(snapshot);
@@ -351,44 +354,48 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
     }
 
     public Page<RecycleBinRecord> listTrash(Class<T> tClass, int pageIndex, int pageSize) {
+        ensureRecycleBinRepository();
         if (recycleBinRepository == null)
             throw new DomainException("RecycleBinRepository not configured");
         String entityType = tClass.getName();
-        List<Document> docs = recycleBinRepository.listByEntityType(entityType, pageIndex, pageSize);
+        List<Map<String, Object>> docs = recycleBinRepository.listByEntityType(entityType, pageIndex, pageSize);
         long total = recycleBinRepository.countByEntityType(entityType);
         return buildTrashPage(docs, total, pageIndex, pageSize);
     }
 
     public long countTrash(Class<T> tClass) {
+        ensureRecycleBinRepository();
         if (recycleBinRepository == null)
             throw new DomainException("RecycleBinRepository not configured");
         return recycleBinRepository.countByEntityType(tClass.getName());
     }
 
     public Page<RecycleBinRecord> listAllTrash(int pageIndex, int pageSize) {
+        ensureRecycleBinRepository();
         if (recycleBinRepository == null)
             throw new DomainException("RecycleBinRepository not configured");
-        List<Document> docs = recycleBinRepository.listAll(pageIndex, pageSize);
+        List<Map<String, Object>> docs = recycleBinRepository.listAll(pageIndex, pageSize);
         long total = recycleBinRepository.countAll();
         return buildTrashPage(docs, total, pageIndex, pageSize);
     }
 
     public long countAllTrash() {
+        ensureRecycleBinRepository();
         if (recycleBinRepository == null)
             throw new DomainException("RecycleBinRepository not configured");
         return recycleBinRepository.countAll();
     }
 
-    private Page<RecycleBinRecord> buildTrashPage(List<Document> docs, long total, int pageIndex, int pageSize) {
+    private Page<RecycleBinRecord> buildTrashPage(List<Map<String, Object>> docs, long total, int pageIndex, int pageSize) {
         List<RecycleBinRecord> records = new ArrayList<>();
-        for (Document doc : docs) {
+        for (Map<String, Object> doc : docs) {
             RecycleBinRecord record = new RecycleBinRecord();
-            record.setId(doc.getObjectId("_id").toHexString());
-            record.setStreamId(doc.getString("streamId"));
-            record.setEntityId(doc.getString("entityId"));
-            record.setEntityType(doc.getString("entityType"));
+            record.setId(String.valueOf(doc.get("_id")));
+            record.setStreamId((String) doc.get("streamId"));
+            record.setEntityId((String) doc.get("entityId"));
+            record.setEntityType((String) doc.get("entityType"));
             record.setSnapshotDoc((Map<String, Object>) doc.get("snapshotDoc"));
-            record.setDeleteTime(doc.getDate("deleteTime"));
+            record.setDeleteTime((java.util.Date) doc.get("deleteTime"));
             records.add(record);
         }
         Page<RecycleBinRecord> page = new Page<>();
@@ -397,6 +404,12 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         page.setPageSize(pageSize);
         page.setContent(records);
         return page;
+    }
+
+    private void ensureRecycleBinRepository() {
+        if (recycleBinRepository == null) {
+            recycleBinRepository = MongoRecycleBinRepository.fromDefault();
+        }
     }
 
     private Integer getExpectedVersion(int startVersion) {

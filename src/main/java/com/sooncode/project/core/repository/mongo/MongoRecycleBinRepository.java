@@ -1,18 +1,24 @@
-package com.sooncode.project.core.recycle;
+package com.sooncode.project.core.repository.mongo;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Indexes;
 import com.sooncode.project.core.annotations.ModelSnapshot;
-import com.sooncode.project.core.repository.mongo.IMongoDBDao;
+import com.sooncode.project.core.recycle.IRecycleBinRepository;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
-public class RecycleBinRepository {
+/**
+ * MongoDB 回收站存储库实现。
+ *
+ * <p>集合名为 {@code recycleBin}，删除实体时保存完整 snapshot doc，恢复时写回原快照集合。</p>
+ */
+public class MongoRecycleBinRepository implements IRecycleBinRepository {
     private static final String COLLECTION_NAME = "recycleBin";
     private static final String DEFAULT_SNAPSHOT_COLLECTION = "eventSnapshot";
 
@@ -20,9 +26,22 @@ public class RecycleBinRepository {
     private final String dbName;
     private boolean indexesCreated = false;
 
-    public RecycleBinRepository(IMongoDBDao dao, String dbName) {
+    public MongoRecycleBinRepository(IMongoDBDao dao, String dbName) {
         this.dao = dao;
         this.dbName = dbName;
+    }
+
+    /**
+     * 使用框架默认数据库连接（MongoSingle 单例）创建回收站存储库。
+     *
+     * @return Mongo 回收站存储库；若 MongoSingle 未初始化（未调用 new MongoConnection），返回 null
+     */
+    public static MongoRecycleBinRepository fromDefault() {
+        MongoSingle single = MongoSingle.getInstance();
+        if (single == null || single.mongoDB == null || single.dbName == null || single.dbName.isEmpty()) {
+            return null;
+        }
+        return new MongoRecycleBinRepository(single.mongoDB, single.dbName);
     }
 
     private MongoCollection<Document> getCollection() {
@@ -36,6 +55,7 @@ public class RecycleBinRepository {
         return col;
     }
 
+    @Override
     public void save(Class<?> entityClass, String streamId, String entityId) {
         String snapshotCollection = resolveSnapshotCollection(entityClass);
         MongoCollection<Document> snapshotCol = dao.getCollection(dbName, snapshotCollection);
@@ -52,11 +72,13 @@ public class RecycleBinRepository {
         col.insertOne(doc);
     }
 
+    @Override
     public Document findByStreamId(String streamId) {
         MongoCollection<Document> col = getCollection();
         return col.find(Filters.eq("streamId", streamId)).first();
     }
 
+    @Override
     public Document restoreSnapshot(String streamId, Class<?> entityClass) {
         Document recycleDoc = findByStreamId(streamId);
         if (recycleDoc == null) return null;
@@ -70,35 +92,40 @@ public class RecycleBinRepository {
         return snapshotDoc;
     }
 
-    public List<Document> listByEntityType(String entityType, int pageIndex, int pageSize) {
+    @Override
+    public List<Map<String, Object>> listByEntityType(String entityType, int pageIndex, int pageSize) {
         MongoCollection<Document> col = getCollection();
         Bson filter = Filters.eq("entityType", entityType);
-        return col.find(filter)
+        return new ArrayList<Map<String, Object>>(col.find(filter)
                 .sort(new Document("deleteTime", -1))
                 .skip(pageIndex * pageSize)
                 .limit(pageSize)
-                .into(new ArrayList<>());
+                .into(new ArrayList<Document>()));
     }
 
+    @Override
     public long countByEntityType(String entityType) {
         MongoCollection<Document> col = getCollection();
         return col.countDocuments(Filters.eq("entityType", entityType));
     }
 
-    public List<Document> listAll(int pageIndex, int pageSize) {
+    @Override
+    public List<Map<String, Object>> listAll(int pageIndex, int pageSize) {
         MongoCollection<Document> col = getCollection();
-        return col.find()
+        return new ArrayList<Map<String, Object>>(col.find()
                 .sort(new Document("deleteTime", -1))
                 .skip(pageIndex * pageSize)
                 .limit(pageSize)
-                .into(new ArrayList<>());
+                .into(new ArrayList<Document>()));
     }
 
+    @Override
     public long countAll() {
         MongoCollection<Document> col = getCollection();
         return col.countDocuments();
     }
 
+    @Override
     public void removeByStreamId(String streamId) {
         MongoCollection<Document> col = getCollection();
         col.deleteMany(Filters.eq("streamId", streamId));
