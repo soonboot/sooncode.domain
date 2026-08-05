@@ -26,7 +26,8 @@ v1.8.3 引入的回收站功能通过 `DomainRepository.setRecycleBinRepository(
 core/recycle/IRecycleBinRepository.java                    ← 新增接口（数据库无关）
 core/recycle/RecycleBinRecord.java                         ← 不变
 core/repository/mongo/MongoRecycleBinRepository.java       ← 现 RecycleBinRepository 逻辑迁移
-core/model/DomainRepository.java                           ← 字段类型改接口，惰性自配置
+core/model/RecycleBinRepository.java                       ← 新增业务门面（回收站操作逻辑）
+core/model/DomainRepository.java                           ← 引用业务门面，delete 触发回收站保存
 ```
 
 ### `IRecycleBinRepository` 接口
@@ -71,27 +72,27 @@ public static MongoRecycleBinRepository fromDefault() {
 }
 ```
 
+### `model/RecycleBinRepository`（业务门面）
+
+回收站操作逻辑集中在 model 包，不混入 `DomainRepository`：
+
+- 字段：`IEventStore eventStore`、`IRecycleBinRepository recycleRepository`（数据层）
+- 构造器 `RecycleBinRepository(IEventStore)`：数据层默认 `MongoRecycleBinRepository.fromDefault()` 自动配置
+- 构造器 `RecycleBinRepository(IEventStore, IRecycleBinRepository)`：显式注入
+- `setRecycleRepository(IRecycleBinRepository)`：可选覆盖数据层
+- 方法：`saveToRecycleBin(entityClass, streamName, entityId)`（供 delete 调用）、`restore`、`listTrash`、`countTrash`、`listAllTrash`、`countAllTrash`
+- `ensureRecycleRepository()`：数据层为 null 时尝试 `fromDefault()`，仍为 null 则抛 `RecycleBinRepository not configured`
+
 ### `DomainRepository` 改动
 
-1. 字段类型：`protected RecycleBinRepository` → `protected IRecycleBinRepository`
-2. `setRecycleBinRepository` 参数类型改为 `IRecycleBinRepository`
-3. import 调整：`com.sooncode.project.core.recycle.IRecycleBinRepository`、`com.sooncode.project.core.repository.mongo.MongoRecycleBinRepository`
-4. 新增惰性自配置：
-
-```java
-private void ensureRecycleBinRepository() {
-    if (recycleBinRepository == null) {
-        recycleBinRepository = MongoRecycleBinRepository.fromDefault();
-    }
-}
-```
-
-5. 在 `saveToRecycleBin`、`restore`、`listTrash`、`countTrash`、`listAllTrash`、`countAllTrash` 六个方法入口调用 `ensureRecycleBinRepository()`
-6. `buildTrashPage` 中 `(Map<String,Object>) doc.get("snapshotDoc")` 的 Map 转换逻辑无需改动（接口已返回 `Map<String,Object>`）
+1. 字段类型：`protected IRecycleBinRepository` → `protected RecycleBinRepository`（业务门面）
+2. `setRecycleBinRepository` 参数类型改为 `RecycleBinRepository`
+3. **移除** `restore`/`listTrash`/`countTrash`/`listAllTrash`/`countAllTrash`/`buildTrashPage`/`ensureRecycleBinRepository`（全部迁入业务门面）
+4. `delete()` 中改为 `recycleBinRepository.saveToRecycleBin(entity.getClass(), streamName, entity.getId())`（门面为 null 时跳过，与现状一致）
 
 ### 兼容性
 
-- `RecycleBinRepository` 类移除并重命名为 `MongoRecycleBinRepository`（v1.8.3 刚引入，无外部依赖）
+- 原 `RecycleBinRepository`（recycle 包，v1.8.3 引入）已重命名为 `MongoRecycleBinRepository`；v1.8.4 新增 model 包业务门面
 - 显式 `setRecycleBinRepository()` 仍优先，自动配置仅在为 null 时生效，向后兼容
 
 ## 行为语义
@@ -100,6 +101,19 @@ private void ensureRecycleBinRepository() {
 |------|--------|-----------|
 | MongoSingle 已初始化 | 自动写入回收站 | 正常工作 |
 | MongoSingle 未初始化 | 静默跳过（与现状一致） | 抛 `RecycleBinRepository not configured` |
+
+## 数据流
+
+```
+DomainRepository.delete(entity)
+  → recycleBinRepository.saveToRecycleBin(entityClass, streamName, entityId)   // 业务门面
+      → recycleRepository.save(...)                                             // 数据层接口
+          → MongoRecycleBinRepository（写入 recycleBin 集合）
+
+用户调用 restore/listTrash/... → model.RecycleBinRepository（业务门面）
+  → IRecycleBinRepository（数据层接口）
+      → MongoRecycleBinRepository（Mongo 实现，未来可替换为 MySQL/PG 实现）
+```
 
 ## 测试
 
