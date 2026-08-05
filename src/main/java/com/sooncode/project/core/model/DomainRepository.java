@@ -32,6 +32,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
      */
     public DomainRepository(IEventStore eventStore) {
         this.eventStore = eventStore;
+        recycleBinRepository = new RecycleBinRepository(eventStore);
     }
 
     private DomainRepository() {
