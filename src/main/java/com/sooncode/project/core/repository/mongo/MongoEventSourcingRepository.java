@@ -6,7 +6,6 @@ import com.mongodb.BasicDBObject;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.Indexes;
 import com.sooncode.project.core.finder.Page;
 import com.sooncode.project.core.model.*;
 import com.sooncode.project.core.utils.Utils;
@@ -46,7 +45,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     @Override
     public void addMetadata(EventStream stream) {
         MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
-        col.createIndex(Indexes.ascending("id"));
+        MongoIndexInitializer.initializeEventMetadata(col);
         dao.addOne(col, MongoDocumentMapper.metadata(stream));
     }
 
@@ -62,7 +61,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     @Override
     public void saveStream(EventWrapper stream) {
         MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
-        col.createIndex(Indexes.ascending("streamId"));
+        MongoIndexInitializer.initializeEventSource(col);
         dao.addOne(col, MongoDocumentMapper.event(stream));
     }
 
@@ -86,11 +85,11 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
 
     @Override
     public List<EventWrapper> getStream(String streamName, Integer fromVersion, Integer toVersion) {
-        MongoCollection<Document> col = dao.getCollection(dbName, eventSource);
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
         List<Bson> list = new ArrayList<>();
-        list.add(Filters.eq("streamId", streamName));
-        list.add(Filters.gte("version", fromVersion));
-        list.add(Filters.lte("version", toVersion));
+        list.add(Filters.eq(MongoDocumentMapper.STREAM_ID, streamName));
+        list.add(Filters.gte(MongoDocumentMapper.VERSION, fromVersion));
+        list.add(Filters.lte(MongoDocumentMapper.VERSION, toVersion));
         LinkedHashMap<String, IMongoDBDao.SortEnum> sort = new LinkedHashMap<>();
         sort.put("version", IMongoDBDao.SortEnum.ASC);
         Bson bson = Filters.and(list);
@@ -101,15 +100,16 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
             Document doc = cursor.next();
             try {
                 JSONObject jsonObject = new JSONObject();
-                jsonObject.putAll(doc.get("event", new HashMap<>()));
-                DomainEvent ev = (DomainEvent) jsonObject.toJavaObject(Class.forName(doc.getString("eventType")));
+                jsonObject.putAll(doc.get(MongoDocumentMapper.EVENT, new HashMap<>()));
+                DomainEvent ev = (DomainEvent) jsonObject.toJavaObject(
+                        Class.forName(doc.getString(MongoDocumentMapper.EVENT_TYPE)));
                 EventWrapper event = new EventWrapper(
                     ev,
-                    doc.getInteger("version"),
-                    doc.getDate("createDate"),
-                    doc.getString("streamId"),
-                    doc.get("creater",new HashMap<>()),
-                    doc.get("description",new HashMap<>())
+                    doc.getInteger(MongoDocumentMapper.VERSION),
+                    doc.getDate(MongoDocumentMapper.CREATE_DATE),
+                    doc.getString(MongoDocumentMapper.STREAM_ID),
+                    doc.get(MongoDocumentMapper.CREATER,new HashMap<>()),
+                    doc.get(MongoDocumentMapper.DESCRIPTION,new HashMap<>())
                 );
                 events.add(event);
             } catch (Exception ex) {
@@ -123,14 +123,14 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
 
     @Override
     public Page<EventWrapper> getStream(String modelType, String eventType, String creater, int pageSize, int pageIndex) {
-        MongoCollection<Document> col = dao.getCollection(dbName, eventSource);
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
         List<Bson> filter = new ArrayList<>();
         if(modelType != null && !modelType.equals(""))
-            filter.add(Filters.regex("streamId","^.*"+modelType+".*$"));
+            filter.add(Filters.regex(MongoDocumentMapper.STREAM_ID,"^.*"+modelType+".*$"));
         if (eventType != null && !eventType.equals(""))
-            filter.add(Filters.eq("eventType", eventType));
+            filter.add(Filters.eq(MongoDocumentMapper.EVENT_TYPE, eventType));
         if (creater != null && !creater.equals(""))
-            filter.add(Filters.eq("creater.id", creater));
+            filter.add(Filters.eq(MongoDocumentMapper.CREATER + ".id", creater));
         LinkedHashMap<String, IMongoDBDao.SortEnum> sort = new LinkedHashMap<>();
         sort.put("createDate", IMongoDBDao.SortEnum.DESC);
         Bson bson=new BasicDBObject();
@@ -143,15 +143,16 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
             Document doc = cursor.next();
             try {
                 JSONObject jsonObject = new JSONObject();
-                jsonObject.putAll(doc.get("event", new HashMap<>()));
-                DomainEvent ev = (DomainEvent) jsonObject.toJavaObject(Class.forName(doc.getString("eventType")));
+                jsonObject.putAll(doc.get(MongoDocumentMapper.EVENT, new HashMap<>()));
+                DomainEvent ev = (DomainEvent) jsonObject.toJavaObject(
+                        Class.forName(doc.getString(MongoDocumentMapper.EVENT_TYPE)));
                 EventWrapper event = new EventWrapper(
                     ev,
-                    doc.getInteger("version"),
-                    doc.getDate("createDate"),
-                    doc.getString("streamId"),
-                    doc.get("creater",new HashMap<>()),
-                    doc.get("description",new HashMap<>())
+                    doc.getInteger(MongoDocumentMapper.VERSION),
+                    doc.getDate(MongoDocumentMapper.CREATE_DATE),
+                    doc.getString(MongoDocumentMapper.STREAM_ID),
+                    doc.get(MongoDocumentMapper.CREATER,new HashMap<>()),
+                    doc.get(MongoDocumentMapper.DESCRIPTION,new HashMap<>())
                 );
                 list.add(event);
             } catch (Exception ex) {
@@ -171,42 +172,37 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     @Override
     public void saveSnapshotWrapper(SnapshotWrapper eventStream,String modelCollection) {
         MongoCollection<Document> col = dao.getCollection(dbName, getCollectionName(modelCollection));
-        Map<String, Object> map = new HashMap<>();
-        map.put("snapshot", MongoJsonUtil.toJsonObject(eventStream.getSnapshot()));
-        map.put("createDate", eventStream.getCreateDate());
+        MongoIndexInitializer.initializeSnapshot(col);
+        Map<String, Object> map = MongoDocumentMapper.snapshotFields(eventStream);
 
         BasicDBObject bson = new BasicDBObject();
-        bson.put("streamId", eventStream.getStreamId());
+        bson.put(MongoDocumentMapper.STREAM_ID, eventStream.getStreamId());
         if (dao.isExit(col, bson)) {
             dao.update(col, bson, map);
         } else {
-            col.createIndex(Indexes.ascending("streamId"));
-            col.createIndex(Indexes.ascending("snapshotType"));
-            col.createIndex(Indexes.descending("createDate"));
-            map.put("snapshotType", eventStream.getSnapshotType().getName());
-            map.put("streamId", eventStream.getStreamId());
-            dao.addOne(col, map);
+            dao.addOne(col, MongoDocumentMapper.snapshot(eventStream));
         }
     }
 
     @Override
     public void deleteSnapshotWrapper(String streamId,String modelCollection) {
         MongoCollection<Document> col = dao.getCollection(dbName, getCollectionName(modelCollection));
-        dao.delete(col, Utils.mapBuilder("streamId", streamId));
+        dao.delete(col, Utils.mapBuilder(MongoDocumentMapper.STREAM_ID, streamId));
     }
 
     @Override
     public SnapshotWrapper getSnapshotWrapper(String streamId,String modelCollection) {
         MongoCollection<Document> col = dao.getCollection(dbName, getCollectionName(modelCollection));
         BasicDBObject bson = new BasicDBObject();
-        bson.put("streamId", streamId);
+        bson.put(MongoDocumentMapper.STREAM_ID, streamId);
         SnapshotWrapper snapshot = null;
         Document doc = dao.findFirst(col, bson, null);
         if (doc == null) return null;
         try {
-            JSONObject jsonObject = new JSONObject(doc.get("snapshot", new HashMap<>()));
-            Entity en = (Entity) jsonObject.toJavaObject(Class.forName(doc.getString("snapshotType")));
-            snapshot = new SnapshotWrapper(doc.getString("streamId"), en);
+            JSONObject jsonObject = new JSONObject(doc.get(MongoDocumentMapper.SNAPSHOT, new HashMap<>()));
+            Entity en = (Entity) jsonObject.toJavaObject(Class.forName(doc.getString(MongoDocumentMapper.SNAPSHOT_TYPE)));
+            snapshot = new SnapshotWrapper(doc.getString(MongoDocumentMapper.STREAM_ID), en,
+                    doc.getDate(MongoDocumentMapper.CREATE_DATE));
         } catch (Exception ex) {
             ex.printStackTrace();
             return null;
@@ -218,15 +214,16 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     public List<SnapshotWrapper> getSnapshotWrapperList(String streamType,String modelCollection) {
         MongoCollection<Document> col = dao.getCollection(dbName, getCollectionName(modelCollection));
         BasicDBObject bson = new BasicDBObject();
-        bson.put("snapshotType", streamType);
+        bson.put(MongoDocumentMapper.SNAPSHOT_TYPE, streamType);
         List<SnapshotWrapper> snapshotList = new ArrayList<>();
         MongoCursor<Document> cursor = dao.find(col, bson, null);
         while (cursor.hasNext()) {
             Document doc = cursor.next();
             try {
-                JSONObject jsonObject = new JSONObject(doc.get("snapshot", new HashMap<>()));
-                Entity en = (Entity) jsonObject.toJavaObject(Class.forName(doc.getString("eventType")));
-                SnapshotWrapper snapshot = new SnapshotWrapper(doc.getString("streamId"), en);
+            JSONObject jsonObject = new JSONObject(doc.get(MongoDocumentMapper.SNAPSHOT, new HashMap<>()));
+            Entity en = (Entity) jsonObject.toJavaObject(Class.forName(doc.getString(MongoDocumentMapper.SNAPSHOT_TYPE)));
+            SnapshotWrapper snapshot = new SnapshotWrapper(doc.getString(MongoDocumentMapper.STREAM_ID), en,
+                    doc.getDate(MongoDocumentMapper.CREATE_DATE));
                 snapshotList.add(snapshot);
             } catch (Exception ex) {
                 ex.printStackTrace();
@@ -240,14 +237,14 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     public Map getSnapshotDoc(String streamType,String modelCollection) {
         MongoCollection<Document> col = dao.getCollection(dbName, getCollectionName(modelCollection));
         BasicDBObject bson = new BasicDBObject();
-        bson.put("snapshotType", streamType);
+        bson.put(MongoDocumentMapper.SNAPSHOT_TYPE, streamType);
         Document doc = dao.findFirst(col, bson, null);
         if (doc == null) return null;
-        return doc.get("snapshot", Document.class);
+        return doc.get(MongoDocumentMapper.SNAPSHOT, Document.class);
     }
     private String getCollectionName(String modelCollection){
         if(modelCollection!=null&&!modelCollection.isEmpty())return modelCollection;
-        return eventSnapshot;
+        return MongoDocumentMapper.EVENT_SNAPSHOT;
     }
 
 }

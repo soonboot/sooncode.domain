@@ -38,6 +38,7 @@ public abstract class DomainEvent implements Serializable {
 
     private String id;
     private Map<String, Object> dynamicParams = new LinkedHashMap<>();
+    private Map<String,Object> modelSnapshot=new LinkedHashMap<>();
 
     public DomainEvent() {
         ensurePropertiesLoaded();
@@ -141,7 +142,9 @@ public abstract class DomainEvent implements Serializable {
         Map<String, Object> map = EntityConvert.entityToMap(obj);
         convertParam(map);
     }
-
+    void convertModelSnapshot(Entity obj){
+        modelSnapshot=EntityConvert.entityToMap(obj);
+    }
     /**
      * 校验并回填 map 中的字段值到事件。
      * 校验顺序：先 @EventBoot.Params 显式声明的参数，再所有实字段；最后批量 set。

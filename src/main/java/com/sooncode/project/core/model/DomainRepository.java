@@ -361,7 +361,7 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
     private void convertEventParam(DomainModel<T> entity) {
         if (entity.isStored()) return;
         for(DomainEvent event:entity.getEvents()) {
-            event.convertParam(entity);
+            event.convertModelSnapshot(entity);
         }
     }
     /**

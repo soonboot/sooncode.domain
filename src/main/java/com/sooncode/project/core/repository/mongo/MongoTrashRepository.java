@@ -50,7 +50,7 @@ public class MongoTrashRepository implements ITrashRepository {
     private MongoCollection<Document> getCollection() {
         MongoCollection<Document> col = dao.getCollection(dbName, COLLECTION_NAME);
         if (!indexesCreated) {
-            col.createIndex(Indexes.ascending("streamId"));
+            MongoIndexInitializer.initializeTrash(col);
             col.createIndex(Indexes.ascending("entityType"));
             col.createIndex(Indexes.descending("deleteTime"));
             indexesCreated = true;

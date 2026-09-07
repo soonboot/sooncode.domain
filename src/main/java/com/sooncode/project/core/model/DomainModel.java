@@ -237,12 +237,14 @@ public abstract class DomainModel<T> extends Entity {
     }
 
     protected void causes(DomainEvent event, Map<String, Object> params) {
-        event.convertParam(params);
+        if(!params.isEmpty())
+            event.convertParam(params);
         causes(event);
     }
 
     protected void causes(DomainEvent event, Entity objParam) {
-        event.convertParam(objParam);
+        if(objParam!=null&&!objParam.equals(this))
+            event.convertParam(objParam);
         causes(event);
     }
 
@@ -253,13 +255,15 @@ public abstract class DomainModel<T> extends Entity {
 
     protected void causes(Class<? extends DomainEvent> cla, Entity objParam) {
         DomainEvent event = getEvent(cla);
-        event.convertParam(objParam);
+        if(objParam!=null&&!objParam.equals(this))
+            event.convertParam(objParam);
         causes(event);
     }
 
     protected void causes(Class<? extends DomainEvent> cla, Map<String, Object> params) {
         DomainEvent event = getEvent(cla);
-        event.convertParam(params);
+        if(!params.isEmpty())
+            event.convertParam(params);
         causes(event);
     }
 

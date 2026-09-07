@@ -8,8 +8,6 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.TransactionBody;
 import com.mongodb.client.model.DeleteOneModel;
 import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.IndexOptions;
-import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.InsertOneModel;
 import com.mongodb.client.model.UpdateOneModel;
 import com.mongodb.client.model.UpdateOptions;
@@ -36,9 +34,6 @@ import java.util.Map;
 
 /** MongoDB 批量持久化仓储，负责 bulk 写入和事务边界。 */
 public class BatchRepository implements IBatchRepository {
-    private static final String EVENT_METADATA = "eventMetadata";
-    private static final String EVENT_SOURCE = "eventSource";
-
     private final IMongoDBDao dao;
     private final String dbName;
     private final BatchPlanner planner;
@@ -94,15 +89,15 @@ public class BatchRepository implements IBatchRepository {
             }
 
             if (operation.isSkipEventSourcing()) {
-                snapshotWrites.add(new InsertOneModel<>(snapshotDocument(streamName, entity)));
+                snapshotWrites.add(new InsertOneModel<>(MongoDocumentMapper.snapshot(operation.snapshot())));
                 continue;
             }
 
             EventStream stream = new EventStream(streamName, entity.getClass());
             stream.setCreateDate(new Date());
             appendEventDocuments(stream, operation, context.eventWrites);
-            context.metadataWrites.add(new InsertOneModel<>(metadataDocument(stream)));
-            snapshotWrites.add(new InsertOneModel<>(snapshotDocument(streamName, entity)));
+            context.metadataWrites.add(new InsertOneModel<>(MongoDocumentMapper.metadata(stream)));
+            snapshotWrites.add(new InsertOneModel<>(MongoDocumentMapper.snapshot(operation.snapshot())));
         }
     }
 
@@ -113,8 +108,9 @@ public class BatchRepository implements IBatchRepository {
             String snapshotCollection = operation.snapshotCollection();
             List<WriteModel<Document>> snapshotWrites = context.snapshotWrites(snapshotCollection);
             if (operation.isSkipEventSourcing()) {
-                snapshotWrites.add(new UpdateOneModel<>(Filters.eq("streamId", streamName),
-                        new Document("$set", snapshotFields(entity)), new UpdateOptions().upsert(true)));
+                snapshotWrites.add(new UpdateOneModel<>(Filters.eq(MongoDocumentMapper.STREAM_ID, streamName),
+                        new Document("$set", MongoDocumentMapper.snapshotFields(operation.snapshot())),
+                        new UpdateOptions().upsert(true)));
                 continue;
             }
 
@@ -122,8 +118,9 @@ public class BatchRepository implements IBatchRepository {
             int previousVersion = stream.getVersion();
             appendEventDocuments(stream, operation, context.eventWrites);
             context.metadataWrites.add(metadataUpdate(operation, stream, previousVersion));
-            snapshotWrites.add(new UpdateOneModel<>(Filters.eq("streamId", streamName),
-                    new Document("$set", snapshotFields(entity)), new UpdateOptions().upsert(true)));
+            snapshotWrites.add(new UpdateOneModel<>(Filters.eq(MongoDocumentMapper.STREAM_ID, streamName),
+                    new Document("$set", MongoDocumentMapper.snapshotFields(operation.snapshot())),
+                    new UpdateOptions().upsert(true)));
         }
     }
 
@@ -136,7 +133,7 @@ public class BatchRepository implements IBatchRepository {
             if (operation.isSkipEventSourcing()) {
                 Document oldSnapshot = findSnapshot(context.session, snapshotCollection, streamName);
                 addTrash(operation, oldSnapshot, context);
-                snapshotWrites.add(new DeleteOneModel<>(Filters.eq("streamId", streamName)));
+                snapshotWrites.add(new DeleteOneModel<>(Filters.eq(MongoDocumentMapper.STREAM_ID, streamName)));
                 continue;
             }
 
@@ -146,7 +143,7 @@ public class BatchRepository implements IBatchRepository {
             context.metadataWrites.add(metadataUpdate(operation, stream, previousVersion));
             Document oldSnapshot = findSnapshot(context.session, snapshotCollection, streamName);
             addTrash(operation, oldSnapshot, context);
-            snapshotWrites.add(new DeleteOneModel<>(Filters.eq("streamId", streamName)));
+            snapshotWrites.add(new DeleteOneModel<>(Filters.eq(MongoDocumentMapper.STREAM_ID, streamName)));
         }
     }
 
@@ -203,28 +200,26 @@ public class BatchRepository implements IBatchRepository {
     }
 
     private void ensureBatchIndexes(List<BatchOperation> operations) {
-        MongoCollection<Document> metadata = dao.getCollection(dbName, EVENT_METADATA);
-        metadata.createIndex(Indexes.ascending("id"), new IndexOptions().unique(true));
-        MongoCollection<Document> source = dao.getCollection(dbName, EVENT_SOURCE);
-        source.createIndex(Indexes.ascending("streamId", "version"), new IndexOptions().unique(true));
+        MongoCollection<Document> metadata = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
+        MongoIndexInitializer.initializeEventMetadata(metadata);
+        MongoCollection<Document> source = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
+        MongoIndexInitializer.initializeEventSource(source);
+        java.util.Set<String> snapshotCollections = new java.util.HashSet<>();
         for (BatchOperation operation : operations) {
+            if (!snapshotCollections.add(operation.snapshotCollection())) continue;
             MongoCollection<Document> snapshots = dao.getCollection(dbName, operation.snapshotCollection());
-            snapshots.createIndex(Indexes.ascending("streamId"), new IndexOptions().unique(true));
-            snapshots.createIndex(Indexes.ascending("snapshotType"));
-            snapshots.createIndex(Indexes.descending("createDate"));
+            MongoIndexInitializer.initializeSnapshot(snapshots);
         }
         MongoCollection<Document> trash = trashCollection();
-        trash.createIndex(Indexes.ascending("streamId"));
+        MongoIndexInitializer.initializeTrash(trash);
     }
 
     private EventStream loadMetadata(ClientSession session, String streamName) {
-        Document doc = dao.getCollection(dbName, EVENT_METADATA)
-                .find(session, Filters.eq("id", streamName)).first();
+        Document doc = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA)
+                .find(session, Filters.eq(MongoDocumentMapper.ID, streamName)).first();
         if (doc == null) return null;
         try {
-            return new EventStream(doc.getString("id"), doc.getInteger("version"),
-                    doc.getInteger("invalid"), Class.forName(doc.getString("type")),
-                    doc.getDate("createDate"));
+            return MongoDocumentMapper.toEventStream(doc);
         } catch (Exception ex) {
             throw new DomainException("读取元数据失败:" + streamName);
         }
@@ -233,56 +228,22 @@ public class BatchRepository implements IBatchRepository {
     private void appendEventDocuments(EventStream stream, BatchOperation operation, List<Document> target) {
         for (DomainEvent event : operation.getEvents()) {
             EventWrapper wrapper = stream.registerEvent(event, operation.getEntity().getClass());
-            target.add(eventDocument(wrapper));
+            target.add(MongoDocumentMapper.event(wrapper));
         }
-    }
-
-    private Document metadataDocument(EventStream stream) {
-        return new Document("id", stream.getId())
-                .append("version", stream.getVersion())
-                .append("invalid", stream.getIsInvalid())
-                .append("type", stream.getEntityType().getName())
-                .append("createDate", stream.getCreateDate())
-                .append("ver", MongoEventSourcingRepository.VER);
-    }
-
-    private Document eventDocument(EventWrapper stream) {
-        return new Document("id", stream.getId())
-                .append("version", stream.getEventVersion())
-                .append("streamId", stream.getEventStreamId())
-                .append("event", MongoJsonUtil.toJsonObject(stream.getEvent()))
-                .append("eventType", stream.getEventType().getName())
-                .append("creater", MongoJsonUtil.toJsonObject(stream.getCreater()))
-                .append("createDate", stream.getCreateDate())
-                .append("description", MongoJsonUtil.toJsonObject(stream.getDescription()));
-    }
-
-    private Document snapshotDocument(String streamName, DomainModel entity) {
-        return new Document("streamId", streamName)
-                .append("snapshotType", entity.getClass().getName())
-                .append("snapshot", MongoJsonUtil.toJsonObject(entity))
-                .append("createDate", new Date());
-    }
-
-    private Map<String, Object> snapshotFields(DomainModel entity) {
-        Map<String, Object> fields = new HashMap<>();
-        fields.put("snapshot", MongoJsonUtil.toJsonObject(entity));
-        fields.put("createDate", new Date());
-        return fields;
     }
 
     private Bson metadataFilter(String streamName, Integer expectedVersion, int currentVersion) {
         List<Bson> filters = new ArrayList<>();
-        filters.add(Filters.eq("id", streamName));
-        filters.add(Filters.eq("invalid", 0));
-        if (expectedVersion != null) filters.add(Filters.eq("version", expectedVersion));
-        else filters.add(Filters.eq("version", currentVersion));
+        filters.add(Filters.eq(MongoDocumentMapper.ID, streamName));
+        filters.add(Filters.eq(MongoDocumentMapper.INVALID, 0));
+        if (expectedVersion != null) filters.add(Filters.eq(MongoDocumentMapper.VERSION, expectedVersion));
+        else filters.add(Filters.eq(MongoDocumentMapper.VERSION, currentVersion));
         return Filters.and(filters);
     }
 
     private Document findSnapshot(ClientSession session, String collectionName, String streamName) {
         return dao.getCollection(dbName, collectionName)
-                .find(session, Filters.eq("streamId", streamName)).first();
+                .find(session, Filters.eq(MongoDocumentMapper.STREAM_ID, streamName)).first();
     }
 
     private Document trashDocument(DomainModel entity, String streamName, Document snapshot) {
@@ -308,8 +269,8 @@ public class BatchRepository implements IBatchRepository {
 
         private BatchContext(ClientSession session) {
             this.session = session;
-            this.metadata = dao.getCollection(dbName, EVENT_METADATA);
-            this.source = dao.getCollection(dbName, EVENT_SOURCE);
+            this.metadata = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
+            this.source = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
         }
 
         private List<WriteModel<Document>> snapshotWrites(String collectionName) {

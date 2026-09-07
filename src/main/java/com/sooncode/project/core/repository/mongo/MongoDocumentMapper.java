@@ -72,6 +72,7 @@ final class MongoDocumentMapper {
 
     static Map<String, Object> snapshotFields(SnapshotWrapper wrapper) {
         Map<String, Object> fields = new HashMap<>();
+        fields.put(SNAPSHOT_TYPE, wrapper.getSnapshotType().getName());
         fields.put(SNAPSHOT, MongoJsonUtil.toJsonObject(wrapper.getSnapshot()));
         fields.put(CREATE_DATE, wrapper.getCreateDate());
         return fields;
