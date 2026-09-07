@@ -1,15 +1,15 @@
-package com.sooncode.project.core.recycle;
+package com.sooncode.project.core.trash;
 
 import java.util.List;
 import java.util.Map;
 
 /**
- * 回收站存储库接口
+ * Trash 存储库接口
  *
  * <p>数据库无关，所有方法签名使用 {@link Map}/{@link List} 等通用类型，
  * 以便未来扩展 MySQL、PostgreSQL 等其他数据库实现。</p>
  */
-public interface IRecycleBinRepository {
+public interface ITrashRepository {
 
     /**
      * 从原 snapshot 集合读取完整 doc 并写入回收站。

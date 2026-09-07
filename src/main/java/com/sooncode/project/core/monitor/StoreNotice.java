@@ -4,6 +4,7 @@ import com.sooncode.project.core.annotations.EventBoot;
 import com.sooncode.project.core.model.DomainException;
 import com.sooncode.project.core.model.DomainModel;
 import com.sooncode.project.core.model.IDomainRepository;
+import com.sooncode.project.core.batcher.Batcher;
 
 public class StoreNotice {
     private IDomainRepository repository;
@@ -13,6 +14,7 @@ public class StoreNotice {
     private StoreNotice(){}
     public void Notice(DomainModel entity, EventBoot annotation){
         if(annotation==null)return;
+        if (Batcher.capture(entity, annotation.StoreFunc(), repository)) return;
         switch (annotation.StoreFunc()) {
             case add:
                 repository.add(entity);

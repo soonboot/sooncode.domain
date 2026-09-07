@@ -2,6 +2,7 @@ package com.sooncode.project.core.model;
 
 import com.sooncode.project.core.annotations.EventBoot;
 import com.sooncode.project.core.annotations.IgnoreField;
+import com.sooncode.project.core.batcher.Batcher;
 import com.sooncode.project.core.finder.Finder;
 import com.sooncode.project.core.generic.BasicAddEvent;
 import com.sooncode.project.core.generic.BasicDeleteEvent;
@@ -202,9 +203,10 @@ public abstract class DomainModel<T> extends Entity {
             }
         }
 
-        if (event.getClass().isAnnotationPresent(EventBoot.class) && Monitor.instance != null) {
+        if (event.getClass().isAnnotationPresent(EventBoot.class)) {
             EventBoot eventBoot = event.getClass().getAnnotation(EventBoot.class);
             FuncType ft = eventBoot.StoreFunc();
+            Batcher.capture(this, ft);
             if (ft == FuncType.add) {
                 beforeAdd(event);
             } else if (ft == FuncType.modify) {
@@ -213,7 +215,9 @@ public abstract class DomainModel<T> extends Entity {
                 beforeDelete(event);
             }
             beforeStore(event);
-            Monitor.instance.Store(this, eventBoot);
+            if (Monitor.instance != null) {
+                Monitor.instance.Store(this, eventBoot);
+            }
             if (ft == FuncType.add) {
                 afterAdd(event);
             } else if (ft == FuncType.modify) {
@@ -224,7 +228,11 @@ public abstract class DomainModel<T> extends Entity {
             afterStore(event);
         }
         if (Monitor.instance != null) {
-            Monitor.instance.Notice(event, this);
+            if (Batcher.current() != null) {
+                Batcher.current().deferEventNotice(event, this);
+            } else {
+                Monitor.instance.Notice(event, this);
+            }
         }
     }
 
@@ -308,11 +316,11 @@ public abstract class DomainModel<T> extends Entity {
     /**
      * 持久化成功后由持久层调用，重置 stored 标志。业务代码不应直接调用。
      */
-    void markStored() {
+    public void markStored() {
         this.stored = true;
     }
 
-    boolean isStored() {
+    public boolean isStored() {
         return stored;
     }
 

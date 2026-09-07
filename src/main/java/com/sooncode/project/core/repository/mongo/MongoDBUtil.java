@@ -20,6 +20,7 @@ class MongoDBUtil {
     private int port;
     private String username;
     private String password;
+    private String connectionString;
     private String dbname="";
     private MongoDBUtil(){};
     public MongoDBUtil(String host,int port){
@@ -31,6 +32,9 @@ class MongoDBUtil {
         this.port=port;
         this.username=username;
         this.password=password;
+    }
+    public MongoDBUtil(String connectionString){
+        this.connectionString = connectionString;
     }
     /**
      * 关闭连接对象
@@ -78,12 +82,20 @@ class MongoDBUtil {
      * @return  MongoDatabase
      */
     public MongoDatabase getDatabase(String databaseName){
+        this.dbname = databaseName;
         if(client == null){
-            if(username==null)
+            if(connectionString != null)
+                client = MongoClients.create(connectionString);
+            else if(username==null)
                 mongoClient();
             else certifyMongoClient();
         }
         MongoDatabase database = client.getDatabase(databaseName);
         return database;
+    }
+
+    MongoClient getClient() {
+        if (client == null) getDatabase(dbname);
+        return client;
     }
 }

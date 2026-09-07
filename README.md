@@ -372,6 +372,75 @@ session.commit();  // persists all at once / 一次性持久化
 session.rollback(); // discards on error / 回滚
 ```
 
+### Batch persistence / 批量增删改
+
+`Batcher` provides the batch APIs. The recommended form is a batch scope:
+domain methods such as `add()`, `update()` and `delete()` are
+collected and persisted together after the scope completes.
+
+```java
+DomainRepository<User> repository = (DomainRepository<User>) monitor.getDomainRepository();
+
+BatchResult<User> result = new Batcher<>(User.class, repository)
+    .run(batch -> {
+        user1.create("Alice");
+        user2.create("Bob");
+        user3.create("Carol");
+    });
+```
+
+For entities whose events have already been collected, the explicit APIs are
+also available:
+
+```java
+new Batcher<>(User.class, repository)
+    .addAll(users)
+    .options(BatchOptions.defaults().atomic(false))
+    .execute();
+new Batcher<>(User.class, repository)
+    .saveAll(users)
+    .execute();
+new Batcher<>(User.class, repository)
+    .deleteAll(users)
+    .execute();
+new Batcher<>(User.class, repository)
+    .deleteById(Arrays.asList(userId1, userId2, userId3))
+    .execute();
+```
+
+`deleteById` 会先加载实体并生成删除事件，不会绕过领域层直接物理删除；不存在的 ID 会记录在返回结果的 `skippedCount` 中。
+
+批量执行默认采用 `failureMode = CONTINUE`：单个实体持久化失败会记录在
+`BatchResult.getFailures()` 中，并继续执行后续实体；成功项会计入 `successCount`，失败项不会被标记为已存储。
+如需任意失败立即终止，可显式使用 `FAIL_FAST`：
+
+```java
+BatchOptions options = BatchOptions.defaults()
+    .failureMode(FailureMode.FAIL_FAST);
+
+BatchResult<User> result = new Batcher<>(User.class, repository)
+    .options(options)
+    .saveAll(users)
+    .execute();
+```
+
+`CONTINUE` 模式必须使用 `atomic=false`，每个实体独立执行；如果配置为 `atomic=true`，执行时会直接抛出配置异常。
+需要整个批次一次性事务和失败即停止时，可使用：
+
+```java
+BatchOptions options = BatchOptions.defaults()
+    .failureMode(FailureMode.FAIL_FAST)
+    .atomic(true);
+```
+
+使用 `atomic=false` 时，单个实体内部的多步写入不保证回滚。
+
+The default batch configuration uses non-transactional execution because the
+default `failureMode` is `CONTINUE`. Transactions cover event metadata, event
+records, snapshots, and Trash records, and require MongoDB replica-set
+deployment or MongoDB Atlas. For a transactional fail-fast batch, configure
+`BatchOptions.defaults().failureMode(FailureMode.FAIL_FAST).atomic(true)`.
+
 ### Validation / 校验
 
 ```java

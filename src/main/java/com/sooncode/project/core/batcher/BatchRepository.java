@@ -1,0 +1,137 @@
+package com.sooncode.project.core.batcher;
+
+import com.sooncode.project.core.annotations.SkipEventSourcing;
+import com.sooncode.project.core.model.DomainException;
+import com.sooncode.project.core.model.DomainModel;
+import com.sooncode.project.core.model.Entity;
+import com.sooncode.project.core.model.IDomainRepository;
+import com.sooncode.project.core.model.IGenerateReport;
+import com.sooncode.project.core.trash.Trash;
+import com.sooncode.project.core.monitor.FuncType;
+import com.sooncode.project.core.validator.IValidate;
+import com.sooncode.project.core.validator.ModelValidateFailException;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 批量操作的统一持久化入口。
+ *
+ * <p>Batcher 负责收集和编排操作，BatchRepository 负责校验、准备以及提交操作。
+ * DomainRepository 只保留单实体 CRUD，不再承担批量持久化职责。</p>
+ */
+public class BatchRepository<T extends DomainModel> {
+    private final IDomainRepository<T> repository;
+    private final IBatchStore batchStore;
+    private Trash trashRepository;
+
+    /** 创建一个基于普通领域仓储的批量仓储。 */
+    public BatchRepository(IDomainRepository<T> repository) {
+        this(repository, null, null);
+    }
+
+    /** 创建一个由指定批量存储器负责批量持久化的批量仓储。 */
+    public BatchRepository(IDomainRepository<T> repository, IBatchStore batchStore,
+                           Trash trashRepository) {
+        if (repository == null) throw new DomainException("批量操作仓储未配置");
+        this.repository = repository;
+        this.batchStore = batchStore;
+        this.trashRepository = trashRepository;
+    }
+
+    public void setTrashRepository(Trash trashRepository) {
+        this.trashRepository = trashRepository;
+    }
+
+    /**
+     * 供领域仓储在批量作用域内拦截单条 CRUD 调用。
+     * 批量作用域状态和操作注册仍由 Batcher 管理，领域仓储不直接依赖其实现细节。
+     */
+    public static boolean capture(DomainModel entity, FuncType funcType,
+                                  IDomainRepository<?> repository) {
+        return Batcher.capture(entity, funcType, repository);
+    }
+
+    /** 统一提交批量操作。 */
+    public BatchResult<T> persistOperations(List<BatchOperation> operations, BatchOptions options) {
+        if (operations == null || operations.isEmpty()) return new BatchResult<>();
+        if (options == null) options = BatchOptions.defaults();
+        options.validate();
+
+        List<BatchOperation> prepared = new ArrayList<>();
+        BatchResult<T> result = new BatchResult<>();
+        for (BatchOperation operation : operations) {
+            if (operation == null) throw new DomainException("批量操作不能为 null");
+            DomainModel entity = operation.getEntity();
+            if (entity == null) throw new DomainException("批量操作实体不能为 null");
+            if (entity.isStored()) {
+                result.incrementSkipped();
+                continue;
+            }
+
+            DomainModel oldEntity = operation.getOldEntity();
+            if (operation.getType() == BatchOperation.Type.MODIFY && oldEntity == null) {
+                oldEntity = repository.findByID(entity.getId(), (Class<T>) entity.getClass());
+            }
+            validateEntity(entity, operation.getFuncType());
+            prepared.add(new BatchOperation(operation.getType(), entity, oldEntity,
+                    entity.getEvents(), operation.getExpectedVersion(), isSkipEventSourcing(entity),
+                    trashRepository != null && trashRepository.isEnabled()));
+        }
+        if (prepared.isEmpty()) return result;
+
+        if (!options.isAtomic()) {
+            for (BatchOperation operation : prepared) {
+                if (operation.getType() == BatchOperation.Type.DELETE && operation.isTrash()) {
+                    throw new DomainException("启用 Trash 的批量删除必须开启事务");
+                }
+            }
+        }
+
+        if (batchStore != null) {
+            batchStore.persistBatch(prepared, options.isAtomic());
+            for (BatchOperation operation : prepared) {
+                operation.getEntity().markStored();
+                result.incrementSuccess();
+            }
+            return result;
+        }
+
+        // 没有统一事件存储器的自定义仓储，逐项复用单实体 API。
+        for (BatchOperation operation : prepared) {
+            persistOne(operation);
+            operation.getEntity().markStored();
+            result.incrementSuccess();
+        }
+        return result;
+    }
+
+    private void persistOne(BatchOperation operation) {
+        DomainModel entity = operation.getEntity();
+        switch (operation.getType()) {
+            case ADD:
+                repository.add((T) entity, (IGenerateReport) null, false);
+                break;
+            case MODIFY:
+                repository.save((T) entity, (IGenerateReport) null, false);
+                break;
+            case DELETE:
+                repository.delete((T) entity, (IGenerateReport) null, false);
+                break;
+            default:
+                throw new DomainException("未知批量操作类型:" + operation.getType());
+        }
+    }
+
+    private void validateEntity(Entity entity, FuncType funcType) {
+        if (entity instanceof IValidate) {
+            ModelValidateFailException exception = ((IValidate) entity).validate(funcType);
+            if (exception != null) throw exception;
+        }
+    }
+
+    private boolean isSkipEventSourcing(DomainModel entity) {
+        SkipEventSourcing annotation = entity.getClass().getAnnotation(SkipEventSourcing.class);
+        return annotation != null && annotation.value();
+    }
+}

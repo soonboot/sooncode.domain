@@ -45,9 +45,14 @@ public class SnapshotWrapper {
      * @param snapshot
      */
     public SnapshotWrapper(String id,Entity snapshot){
+        this(id, snapshot, new Date());
+    }
+
+    /** 使用已有持久化时间创建快照包装器，供仓储读取时保留原始时间。 */
+    public SnapshotWrapper(String id, Entity snapshot, Date createDate){
         setStreamId(id);
         setSnapshot(snapshot);
         setSnapshotType(snapshot.getClass());
-        setCreateDate(new Date());
+        setCreateDate(createDate);
     }
 }

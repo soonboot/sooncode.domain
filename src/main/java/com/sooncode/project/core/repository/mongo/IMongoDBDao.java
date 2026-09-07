@@ -70,7 +70,7 @@ public interface IMongoDBDao {
      * @param id
      * @return
      */
-    public int deleteById(MongoCollection<Document> coll, String id);
+    public int deleteByIds(MongoCollection<Document> coll, String id);
     public Document findFirst(MongoCollection<Document> coll, Bson filter, LinkedHashMap<String,SortEnum> sort);
     public long count(MongoCollection<Document> coll, Bson filter);
     public MongoCursor<Document> findTop(MongoCollection<Document> coll, Bson filter,LinkedHashMap<String,SortEnum> sort,int num);

@@ -22,6 +22,18 @@ public class MongoDBImpl implements IMongoDBDao{
     public MongoDBImpl(String host,int port,String user,String password){
         this.dbUtil=new MongoDBUtil(host,port,user,password);
     }
+    public MongoDBImpl(String connectionString){
+        this.dbUtil=new MongoDBUtil(connectionString);
+    }
+
+    MongoClient getClient() {
+        return dbUtil.getClient();
+    }
+
+    MongoClient getClient(String databaseName) {
+        dbUtil.getDatabase(databaseName);
+        return dbUtil.getClient();
+    }
     @Override
     public MongoDatabase getDb(String dbName) {
         if (dbName != null && !"".equals(dbName)) {
@@ -71,7 +83,7 @@ public class MongoDBImpl implements IMongoDBDao{
     }
 
     @Override
-    public int deleteById(MongoCollection<Document> coll, String id) {
+    public int deleteByIds(MongoCollection<Document> coll, String id) {
         int count = 0;
         ObjectId _id = null;
         try {

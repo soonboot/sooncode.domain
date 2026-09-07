@@ -1,9 +1,9 @@
-package com.sooncode.project.core.recycle;
+package com.sooncode.project.core.trash;
 
 import java.util.Date;
 import java.util.Map;
 
-public class RecycleBinRecord {
+public class TrashRecord {
     private String id;
     private String streamId;
     private String entityId;

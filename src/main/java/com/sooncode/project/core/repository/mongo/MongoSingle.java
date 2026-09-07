@@ -3,6 +3,7 @@ package com.sooncode.project.core.repository.mongo;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.sooncode.project.core.model.IEventSourcingRepository;
+import com.sooncode.project.core.batcher.IBatchRepository;
 import com.sooncode.project.core.monitor.Monitor;
 
 public class MongoSingle {
@@ -10,6 +11,7 @@ public class MongoSingle {
     IMongoDBDao mongoDB;
     String dbName;
     MongoEventSourcingRepository repository;
+    IBatchRepository batchRepository;
 
     private static MongoSingle instance;
     public static MongoSingle getInstance(){
@@ -17,6 +19,10 @@ public class MongoSingle {
     };
     public IEventSourcingRepository getRepository(){
         return repository;
+    }
+
+    public IBatchRepository getBatchRepository() {
+        return batchRepository;
     }
     public static MongoSingle New(){
         instance= MongoSingle.Singleton.INSTANCE.getInstance();

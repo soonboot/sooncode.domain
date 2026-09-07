@@ -3,7 +3,6 @@ package com.sooncode.project.core.model;
 import com.sooncode.project.core.finder.Page;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 基础领域模型存储库

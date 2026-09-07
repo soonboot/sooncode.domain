@@ -3,7 +3,6 @@ package com.sooncode.project.core.model;
 import com.sooncode.project.core.finder.Page;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 事件存储器接口

@@ -1,6 +1,5 @@
 package com.sooncode.project.core.repository.mongo;
 
-import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.mongodb.BasicDBObject;
 
@@ -22,9 +21,6 @@ import java.util.*;
 public class MongoEventSourcingRepository implements IEventSourcingRepository {
     private IMongoDBDao dao;
     private String dbName;
-    private static final String eventMetadata = "eventMetadata";
-    private static final String eventSource = "eventSource";
-    private static final String eventSnapshot = "eventSnapshot";
     public static final int VER = 15;
 
     @Deprecated
@@ -49,67 +45,41 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
 
     @Override
     public void addMetadata(EventStream stream) {
-        MongoCollection<Document> col = dao.getCollection(dbName, eventMetadata);
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
         col.createIndex(Indexes.ascending("id"));
-        Map<String, Object> map = new HashMap<>();
-        map.put("id", stream.getId());
-        map.put("version", stream.getVersion());
-        map.put("invalid", stream.getIsInvalid());
-        map.put("type", stream.getEntityType().getName());
-        map.put("createDate", stream.getCreateDate());
-        map.put("ver", VER);
-        dao.addOne(col, map);
+        dao.addOne(col, MongoDocumentMapper.metadata(stream));
     }
 
     @Override
     public void updateMetadata(EventStream stream) {
-        MongoCollection<Document> col = dao.getCollection(dbName, eventMetadata);
-        Map<String, Object> map = new HashMap<>();
-        map.put("version", stream.getVersion());
-        map.put("invalid", stream.getIsInvalid());
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
+        Map<String, Object> map = MongoDocumentMapper.metadataFields(stream);
         BasicDBObject bson = new BasicDBObject();
-        bson.put("id", stream.getId());
+        bson.put(MongoDocumentMapper.ID, stream.getId());
         dao.update(col, bson, map);
     }
 
     @Override
     public void saveStream(EventWrapper stream) {
-        MongoCollection<Document> col = dao.getCollection(dbName, eventSource);
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
         col.createIndex(Indexes.ascending("streamId"));
-        Map<String, Object> map = new HashMap<>();
-        map.put("id", stream.getId());
-        map.put("version", stream.getEventVersion());
-        map.put("streamId", stream.getEventStreamId());
-        map.put("event", MongoJsonUtil.toJsonObject(stream.getEvent()));
-        map.put("eventType", stream.getEventType().getName());
-        map.put("creater", MongoJsonUtil.toJsonObject(stream.getCreater()));
-        map.put("createDate", stream.getCreateDate());
-        map.put("description", MongoJsonUtil.toJsonObject(stream.getDescription()));
-        dao.addOne(col, map);
+        dao.addOne(col, MongoDocumentMapper.event(stream));
     }
 
     @Override
     public EventStream loadMetadata(String streamName) {
-        MongoCollection<Document> col = dao.getCollection(dbName, eventMetadata);
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
         BasicDBObject bson = new BasicDBObject();
-        bson.put("id", streamName);
-        EventStream stream = null;
+        bson.put(MongoDocumentMapper.ID, streamName);
         MongoCursor<Document> cursor = dao.find(col, bson, null);
         while (cursor.hasNext()) {
             Document doc = cursor.next();
             try {
-                stream = new EventStream(
-                    doc.getString("id"),
-                    doc.getInteger("version"),
-                    doc.getInteger("invalid"),
-                    Class.forName(doc.getString("type")),
-                    doc.getDate("createDate")
-                );
+                return MongoDocumentMapper.toEventStream(doc);
             } catch (Exception ex) {
                 ex.printStackTrace();
                 return null;
             }
-            return stream;
         }
         return null;
     }

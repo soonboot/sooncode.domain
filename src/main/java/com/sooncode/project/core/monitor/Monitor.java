@@ -1,7 +1,12 @@
 package com.sooncode.project.core.monitor;
 
 import com.sooncode.project.core.annotations.EventBoot;
+import com.sooncode.project.core.batcher.BatchRepository;
+import com.sooncode.project.core.batcher.BatchStore;
+import com.sooncode.project.core.batcher.IBatchRepository;
+import com.sooncode.project.core.batcher.IBatchRepositoryProvider;
 import com.sooncode.project.core.model.*;
+import com.sooncode.project.core.trash.Trash;
 
 public class Monitor {
     private EntityNotice entityNotice;
@@ -9,6 +14,7 @@ public class Monitor {
     private StoreNotice storeNotice;
     private ReportRegister reportRegister;
     private IDomainRepository domainRepository;
+    private BatchRepository<?> batchRepository;
 
     private ICreaterGetter createrGetter;
     public static Monitor instance=null;
@@ -60,12 +66,19 @@ public class Monitor {
     public void ConfigCreater(ICreaterGetter listen){createrGetter=listen;}
     public void ConfigDomainRepository(IDomainRepository repository){
         domainRepository=repository;
+        batchRepository=new BatchRepository<>(repository);
         storeNotice=new StoreNotice(domainRepository);
     }
     public void ConfigDBConnection(IDBConnection dbConnection) {
         IEventSourcingRepository eventRepository= dbConnection.getRepository();
         IEventStore eventStore=new EventStore(eventRepository);
-        this.domainRepository=new DomainRepository(eventStore);
+        Trash trashRepository=new Trash(eventStore);
+        this.domainRepository=new DomainRepository(eventStore, trashRepository);
+        IBatchRepository batchStoreRepository = dbConnection instanceof IBatchRepositoryProvider
+                ? ((IBatchRepositoryProvider) dbConnection).getBatchRepository() : null;
+        this.batchRepository=new BatchRepository<>(domainRepository,
+                batchStoreRepository == null ? null : new BatchStore(batchStoreRepository),
+                trashRepository);
         this.storeNotice=new StoreNotice(domainRepository);
     }
     public ReportRegister RegisterReport(Class cla,IDomainReportRepository repository){
@@ -78,5 +91,9 @@ public class Monitor {
     }
     public IDomainRepository getDomainRepository(){
         return domainRepository;
+    }
+
+    public BatchRepository<?> getBatchRepository() {
+        return batchRepository;
     }
 }

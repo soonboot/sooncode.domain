@@ -4,7 +4,7 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Indexes;
 import com.sooncode.project.core.annotations.ModelSnapshot;
-import com.sooncode.project.core.recycle.IRecycleBinRepository;
+import com.sooncode.project.core.trash.ITrashRepository;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
@@ -14,34 +14,37 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * MongoDB 回收站存储库实现。
+ * MongoDB Trash 存储库实现。
  *
- * <p>集合名为 {@code recycleBin}，删除实体时保存完整 snapshot doc，恢复时写回原快照集合。</p>
+ * <p>集合名为 {@code trash}，删除实体时保存完整 snapshot doc，恢复时写回原快照集合。</p>
  */
-public class MongoRecycleBinRepository implements IRecycleBinRepository {
-    private static final String COLLECTION_NAME = "recycleBin";
+public class MongoTrashRepository implements ITrashRepository {
+    private static final String COLLECTION_NAME = "trash";
     private static final String DEFAULT_SNAPSHOT_COLLECTION = "eventSnapshot";
 
     private final IMongoDBDao dao;
     private final String dbName;
     private boolean indexesCreated = false;
 
-    public MongoRecycleBinRepository(IMongoDBDao dao, String dbName) {
+    public MongoTrashRepository(IMongoDBDao dao, String dbName) {
         this.dao = dao;
         this.dbName = dbName;
+        // MongoDB 仅通过 getCollection() 不会实际创建集合；提前创建 Trash 集合，
+        // 确保使用默认数据库连接时，即使尚未删除数据，trash 也已经存在。
+        getCollection();
     }
 
     /**
-     * 使用框架默认数据库连接（MongoSingle 单例）创建回收站存储库。
+     * 使用框架默认数据库连接（MongoSingle 单例）创建 Trash 存储库。
      *
-     * @return Mongo 回收站存储库；若 MongoSingle 未初始化（未调用 new MongoConnection），返回 null
+     * @return Mongo Trash 存储库；若 MongoSingle 未初始化（未调用 new MongoConnection），返回 null
      */
-    public static MongoRecycleBinRepository fromDefault() {
+    public static MongoTrashRepository fromDefault() {
         MongoSingle single = MongoSingle.getInstance();
         if (single == null || single.mongoDB == null || single.dbName == null || single.dbName.isEmpty()) {
             return null;
         }
-        return new MongoRecycleBinRepository(single.mongoDB, single.dbName);
+        return new MongoTrashRepository(single.mongoDB, single.dbName);
     }
 
     private MongoCollection<Document> getCollection() {
@@ -80,10 +83,10 @@ public class MongoRecycleBinRepository implements IRecycleBinRepository {
 
     @Override
     public Document restoreSnapshot(String streamId, Class<?> entityClass) {
-        Document recycleDoc = findByStreamId(streamId);
-        if (recycleDoc == null) return null;
+        Document trashDoc = findByStreamId(streamId);
+        if (trashDoc == null) return null;
 
-        Document snapshotDoc = (Document) recycleDoc.get("snapshotDoc");
+        Document snapshotDoc = (Document) trashDoc.get("snapshotDoc");
         String collectionName = resolveSnapshotCollection(entityClass);
         MongoCollection<Document> col = dao.getCollection(dbName, collectionName);
         col.insertOne(snapshotDoc);
