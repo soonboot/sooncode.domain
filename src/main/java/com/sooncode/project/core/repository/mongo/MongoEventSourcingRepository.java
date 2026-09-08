@@ -13,6 +13,7 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * MongoDB数据库的事件溯源存储库实体类
@@ -20,6 +21,7 @@ import java.util.*;
 public class MongoEventSourcingRepository implements IEventSourcingRepository {
     private IMongoDBDao dao;
     private String dbName;
+    private final Set<String> initializedSnapshotCollections = ConcurrentHashMap.newKeySet();
     public static final int VER = 15;
 
     @Deprecated
@@ -38,6 +40,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     MongoEventSourcingRepository(IMongoDBDao dao,String dbName) {
         this.dao = dao;
         this.dbName = dbName;
+        initializedSnapshotCollections.add(MongoDocumentMapper.EVENT_SNAPSHOT);
     }
 
     ;
@@ -45,7 +48,6 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     @Override
     public void addMetadata(EventStream stream) {
         MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
-        MongoIndexInitializer.initializeEventMetadata(col);
         dao.addOne(col, MongoDocumentMapper.metadata(stream));
     }
 
@@ -61,7 +63,6 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     @Override
     public void saveStream(EventWrapper stream) {
         MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
-        MongoIndexInitializer.initializeEventSource(col);
         dao.addOne(col, MongoDocumentMapper.event(stream));
     }
 
@@ -171,8 +172,9 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
 
     @Override
     public void saveSnapshotWrapper(SnapshotWrapper eventStream,String modelCollection) {
-        MongoCollection<Document> col = dao.getCollection(dbName, getCollectionName(modelCollection));
-        MongoIndexInitializer.initializeSnapshot(col);
+        String collectionName = getCollectionName(modelCollection);
+        ensureSnapshotIndexes(collectionName);
+        MongoCollection<Document> col = dao.getCollection(dbName, collectionName);
         Map<String, Object> map = MongoDocumentMapper.snapshotFields(eventStream);
 
         BasicDBObject bson = new BasicDBObject();
@@ -245,6 +247,14 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
     private String getCollectionName(String modelCollection){
         if(modelCollection!=null&&!modelCollection.isEmpty())return modelCollection;
         return MongoDocumentMapper.EVENT_SNAPSHOT;
+    }
+
+    private void ensureSnapshotIndexes(String collectionName) {
+        synchronized (initializedSnapshotCollections) {
+            if (initializedSnapshotCollections.contains(collectionName)) return;
+            MongoIndexInitializer.initializeSnapshot(dao.getCollection(dbName, collectionName));
+            initializedSnapshotCollections.add(collectionName);
+        }
     }
 
 }

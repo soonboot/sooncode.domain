@@ -28,7 +28,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *       自动处理嵌套对象/循环引用；不会覆盖聚合根内部字段（events/version/stored）。</li>
  *   <li>set 严格模式：未标 @EventBoot 时遇到未知字段直接抛 DomainException，
  *       避免拼写错误静默丢失。</li>
- *   <li>projectiveEntity 只回写实字段，dynamicParams 字段不回写。</li>
+ *   <li>projectiveEntity 先回写事件实字段，再回写 dynamicParams 中命中聚合根可写属性的键
+ *       （map/DTO 驱动事件的重放与回填路径；跳过 id 与标了 @IgnoreField 的基础设施字段）；
+ *       modelSnapshot 只做溯源记录，不参与回写。</li>
  * </ul>
  */
 public abstract class DomainEvent implements Serializable {
@@ -38,7 +40,7 @@ public abstract class DomainEvent implements Serializable {
 
     private String id;
     private Map<String, Object> dynamicParams = new LinkedHashMap<>();
-    private Map<String,Object> modelSnapshot=new LinkedHashMap<>();
+    private Map<String,Object> modelSnapshot = new LinkedHashMap<>();
 
     public DomainEvent() {
         ensurePropertiesLoaded();
@@ -82,7 +84,7 @@ public abstract class DomainEvent implements Serializable {
         Map<String, PropertyDescriptor> map = new LinkedHashMap<>();
         for (PropertyDescriptor pd : descriptors) {
             String name = pd.getName();
-            if ("dynamicParams".equals(name) || "id".equals(name)) {
+            if ("dynamicParams".equals(name) || "modelSnapshot".equals(name) || "id".equals(name)) {
                 continue;
             }
             map.put(name, pd);
@@ -120,6 +122,13 @@ public abstract class DomainEvent implements Serializable {
     private void checkParam(String fieldName, Map<String, Object> map) {
         Field field = findField(this.getClass(), fieldName);
         if (field == null) {
+            // @EventBoot.Params 声明的动态键允许没有对应实字段：只做必填校验，值走 dynamicParams。
+            if (isDynamicParamDeclared(fieldName)) {
+                if (!map.containsKey(fieldName)) {
+                    throw new DomainException("缺少参数：" + fieldName);
+                }
+                return;
+            }
             throw new DomainException("字段不存在：" + fieldName + " on " + this.getClass().getName());
         }
         if (field.isAnnotationPresent(IgnoreField.class)) {
@@ -135,15 +144,57 @@ public abstract class DomainEvent implements Serializable {
     }
 
     /**
+     * 是否为 @EventBoot.Params 显式声明的参数名（含无对应实字段的动态键）。
+     */
+    private boolean isDynamicParamDeclared(String fieldName) {
+        EventBoot eb = this.getClass().getAnnotation(EventBoot.class);
+        if (eb == null || eb.Params() == null) {
+            return false;
+        }
+        for (String s : eb.Params()) {
+            if (s.equals(fieldName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 把聚合根序列化为 map（走 EntityConvert.entityToMap，自动处理嵌套/循环引用），
      * 然后调用 convertParam(Map) 做参数校验与回填。
      */
     void convertParam(Entity obj) {
         Map<String, Object> map = EntityConvert.entityToMap(obj);
+        EventBoot eb = this.getClass().getAnnotation(EventBoot.class);
+        if (eb == null || !eb.KeepAll()) {
+            map = filterEventParamMap(map);
+        }
         convertParam(map);
     }
-    void convertModelSnapshot(Entity obj){
-        modelSnapshot=EntityConvert.entityToMap(obj);
+
+    /**
+     * 聚合根序列化自带 id/stored/version 这类基础设施属性，它们不属于业务参数，
+     * 且事件 id 由 causes()/构造器按聚合根 id 负责。这里只保留事件关心的键，
+     * 再走严格校验，避免基础设施属性触发“事件字段不存在”。
+     * KeepAll 事件（如 Basic*）不受影响，仍全量进入动态参数。
+     */
+    private Map<String, Object> filterEventParamMap(Map<String, Object> map) {
+        java.util.Set<String> interested =
+                new java.util.LinkedHashSet<>(getDeclaredProperties(this.getClass()).keySet());
+        EventBoot eb = this.getClass().getAnnotation(EventBoot.class);
+        if (eb != null && eb.Params() != null) {
+            interested.addAll(java.util.Arrays.asList(eb.Params()));
+        }
+        Map<String, Object> filtered = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            if (interested.contains(entry.getKey())) {
+                filtered.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return filtered;
+    }
+    void convertModelSnapshot(Entity obj) {
+        modelSnapshot = EntityConvert.entityToMap(obj);
     }
     /**
      * 校验并回填 map 中的字段值到事件。
@@ -169,17 +220,18 @@ public abstract class DomainEvent implements Serializable {
     }
 
     /**
-     * 将事件中的字段回写到聚合根。
-     * <ul>
-     *   <li>优先按实字段（properties）回写；</li>
-     *   <li>事件实字段为空、dynamicParams 非空时（如 BasicAddEvent），把 dynamicParams 中的键
-     *       视为"业务字段"，按聚合根 setter 回写（类型推断走 setPropertyValue）。</li>
-     * </ul>
+     * 将事件回写到聚合根（自定义事件经 when 缺失时的默认路径）。
+     * <ol>
+     *   <li>先回写事件实字段（实体同名可写才写）；</li>
+     *   <li>再回写 dynamicParams 中命中实体可写属性的键——事件经 Map/DTO 构造时，
+     *       未知键会进 dynamicParams，这里把它们转换后写回，保证重放能还原状态。
+     *       跳过 id 与标了 @IgnoreField 的基础设施字段（如 events/stored/version）；
+     *       modelSnapshot 只做审计，不参与回写。</li>
+     * </ol>
      */
     public void projectiveEntity(DomainModel en) {
         Map<String, PropertyDescriptor> declared = getDeclaredProperties(this.getClass());
         PropertyDescriptor[] entityProperties = ReflectUtils.getBeanProperties(en.getClass());
-        // 1) 实字段回写
         for (PropertyDescriptor property : entityProperties) {
             if (property.getWriteMethod() == null) {
                 continue;
@@ -197,25 +249,35 @@ public abstract class DomainEvent implements Serializable {
             }
             setPropertyValue(en, property, value);
         }
-        // 2) dynamicParams 回写（用于 Basic* 通用事件：实字段为空，业务字段全在 dynamicParams）
-        if (!dynamicParams.isEmpty()) {
-            for (PropertyDescriptor property : entityProperties) {
-                if (property.getWriteMethod() == null) {
-                    continue;
-                }
-                String name = property.getName();
-                if ("id".equals(name)) {
-                    continue;
-                }
-                if (!dynamicParams.containsKey(name)) {
-                    continue;
-                }
-                Object value = dynamicParams.get(name);
-                if (value == null) {
-                    continue;
-                }
-                setPropertyValue(en, property, value);
+        Map<String, PropertyDescriptor> entityByName = new LinkedHashMap<>();
+        for (PropertyDescriptor property : entityProperties) {
+            entityByName.put(property.getName(), property);
+        }
+        for (Map.Entry<String, Object> entry : new LinkedHashMap<>(dynamicParams).entrySet()) {
+            String name = entry.getKey();
+            if ("id".equals(name) || declared.containsKey(name)) {
+                continue;
             }
+            PropertyDescriptor target = entityByName.get(name);
+            if (target == null || target.getWriteMethod() == null) {
+                continue;
+            }
+            if (target.getReadMethod() != null
+                    && target.getReadMethod().isAnnotationPresent(IgnoreField.class)) {
+                continue;
+            }
+            if (target.getWriteMethod().isAnnotationPresent(IgnoreField.class)) {
+                continue;
+            }
+            Field field = findField(en.getClass(), name);
+            if (field != null && field.isAnnotationPresent(IgnoreField.class)) {
+                continue;
+            }
+            Object value = entry.getValue();
+            if (value == null) {
+                continue;
+            }
+            setPropertyValue(en, target, value);
         }
     }
 
@@ -279,39 +341,12 @@ public abstract class DomainEvent implements Serializable {
      * 其余尝试直接写入，类型不匹配时降级 toString 转换。
      */
     private void setPropertyValue(Object target, PropertyDescriptor property, Object value) {
-        Class<?> propertyType = property.getPropertyType();
         if (property.getWriteMethod() == null) {
             return;
         }
         try {
-            if (value == null) {
-                property.getWriteMethod().invoke(target, (Object) null);
-                return;
-            }
-            if (propertyType.isInstance(value)) {
-                property.getWriteMethod().invoke(target, value);
-                return;
-            }
-            if (BaseTypeConvert.isSingleValueType(value)) {
-                property.getWriteMethod().invoke(target, BaseTypeConvert.convertValue(value, propertyType));
-                return;
-            }
-            if ((value instanceof Map || value instanceof List)
-                    && (Map.class.isAssignableFrom(propertyType) || List.class.isAssignableFrom(propertyType))) {
-                property.getWriteMethod().invoke(target, value);
-                return;
-            }
-            if (value instanceof Map
-                    && (DomainModel.class.isAssignableFrom(propertyType)
-                        || ValueObject.class.isAssignableFrom(propertyType)
-                        || SimpleObject.class.isAssignableFrom(propertyType))) {
-                Object nested = propertyType.getDeclaredConstructor().newInstance();
-                EntityConvert.mapToEntity((Map<String, Object>) value, nested);
-                property.getWriteMethod().invoke(target, nested);
-                return;
-            }
-            // 兜底：尝试 toString 转换
-            property.getWriteMethod().invoke(target, BaseTypeConvert.convertValue(value, propertyType));
+            Object converted = EntityConvert.convertPropertyValue(value, property);
+            property.getWriteMethod().invoke(target, converted);
         } catch (java.lang.reflect.InvocationTargetException e) {
             throw wrap("对象转换失败", property.getName(), e.getTargetException());
         } catch (java.lang.IllegalAccessException e) {
@@ -356,6 +391,19 @@ public abstract class DomainEvent implements Serializable {
         this.dynamicParams = dynamicParams == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(dynamicParams);
+    }
+
+    /**
+     * 实体最终状态的审计快照。该字段只用于事件持久化，不参与事件参数校验和实体回写。
+     */
+    public Map<String, Object> getModelSnapshot() {
+        return Collections.unmodifiableMap(modelSnapshot);
+    }
+
+    public void setModelSnapshot(Map<String, Object> modelSnapshot) {
+        this.modelSnapshot = modelSnapshot == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(modelSnapshot);
     }
 
     private static DomainException wrap(String action, String field, Throwable cause) {

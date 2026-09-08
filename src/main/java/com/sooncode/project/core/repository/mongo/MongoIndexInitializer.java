@@ -32,6 +32,13 @@ final class MongoIndexInitializer {
         ensureIndex(collection, METADATA_ID_KEY, true, "event_metadata_id_unique");
     }
 
+    static void initializeCoreIndexes(IMongoDBDao dao, String dbName) {
+        initializeEventMetadata(dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA));
+        initializeEventSource(dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE));
+        initializeSnapshot(dao.getCollection(dbName, MongoDocumentMapper.EVENT_SNAPSHOT));
+        initializeTrash(dao.getCollection(dbName, "trash"));
+    }
+
     static void initializeEventSource(MongoCollection<Document> collection) {
         ensureIndex(collection, EVENT_STREAM_VERSION_KEY, true, "event_source_stream_version_unique");
     }
@@ -44,6 +51,8 @@ final class MongoIndexInitializer {
 
     static void initializeTrash(MongoCollection<Document> collection) {
         ensureIndex(collection, TRASH_STREAM_ID_KEY, false, "trash_stream_id");
+        ensureIndex(collection, new Document("entityType", 1), false, "trash_entity_type");
+        ensureIndex(collection, new Document("deleteTime", -1), false, "trash_delete_time");
     }
 
     /**
@@ -63,8 +72,14 @@ final class MongoIndexInitializer {
             boolean existingUnique = Boolean.TRUE.equals(existing.getBoolean("unique", false));
             if (existingUnique == unique) return;
 
-            if (unique && hasDuplicateKeys(collection, key)) {
-                throw new DomainException("Mongo索引无法升级为唯一索引，存在重复数据:" + key);
+            // 永远不把已经存在的唯一索引降级为普通索引。
+            if (existingUnique && !unique) return;
+
+            if (unique) {
+                List<Document> duplicates = findDuplicateKeys(collection, key);
+                if (!duplicates.isEmpty()) {
+                    throw duplicateIndexException(collection, key, "升级", duplicates);
+                }
             }
             String existingName = existing.getString("name");
             if (existingName != null && !existingName.isEmpty()) {
@@ -73,10 +88,16 @@ final class MongoIndexInitializer {
             break;
         }
 
+        if (unique) {
+            List<Document> duplicates = findDuplicateKeys(collection, key);
+            if (!duplicates.isEmpty()) {
+                throw duplicateIndexException(collection, key, "创建", duplicates);
+            }
+        }
         collection.createIndex(key, new IndexOptions().name(indexName).unique(unique));
     }
 
-    private static boolean hasDuplicateKeys(MongoCollection<Document> collection, Document key) {
+    private static List<Document> findDuplicateKeys(MongoCollection<Document> collection, Document key) {
         Document groupKey = new Document();
         for (String field : key.keySet()) {
             groupKey.put(field, "$" + field);
@@ -84,9 +105,25 @@ final class MongoIndexInitializer {
 
         List<Document> pipeline = List.of(
                 new Document("$group", new Document("_id", groupKey)
-                        .append("count", new Document("$sum", 1))),
-                new Document("$match", new Document("count", new Document("$gt", 1)))
+                        .append("count", new Document("$sum", 1))
+                        .append("documentIds", new Document("$push", "$_id"))),
+                new Document("$match", new Document("count", new Document("$gt", 1))),
+                new Document("$limit", 5)
         );
-        return collection.aggregate(pipeline).first() != null;
+        return collection.aggregate(pipeline).into(new ArrayList<>());
+    }
+
+    private static DomainException duplicateIndexException(MongoCollection<Document> collection,
+                                                            Document key,
+                                                            String action,
+                                                            List<Document> duplicates) {
+        String namespace = collection.getNamespace().getFullName();
+        return new DomainException(String.format(
+                "Mongo索引无法%s为唯一索引，数据库集合:%s，索引键:%s，重复数据(最多5组):%s",
+                action,
+                namespace,
+                key.toJson(),
+                duplicates
+        ));
     }
 }

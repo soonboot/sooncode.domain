@@ -88,18 +88,23 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
             session.setSessionFunction(() -> {
-                saveSnapshot(entity);
+                saveSnapshot(entity, FuncType.add);
                 if (!skipES) {
                     createNewStream(entity, streamName);
+                } else {
+                    entity.markEventsPersisted(entity.getPendingEvents());
                 }
+                entity.markStored();
             });
         } else {
-            saveSnapshot(entity);
+            saveSnapshot(entity, FuncType.add);
             if (!skipES) {
                 createNewStream(entity, streamName);
+            } else {
+                entity.markEventsPersisted(entity.getPendingEvents());
             }
+            entity.markStored();
         }
-        entity.markStored();
         try {
             if (report != null)
                 report.add(entity);
@@ -144,19 +149,23 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
             session.setSessionFunction(() -> {
-                saveSnapshot(entity);
+                saveSnapshot(entity, FuncType.modify);
                 if (!skipES) {
                     appendToStream(entity, streamName);
+                } else {
+                    entity.markEventsPersisted(entity.getPendingEvents());
                 }
+                entity.markStored();
             });
         } else {
-            saveSnapshot(entity);
+            saveSnapshot(entity, FuncType.modify);
             if (!skipES) {
                 appendToStream(entity, streamName);
+            } else {
+                entity.markEventsPersisted(entity.getPendingEvents());
             }
+            entity.markStored();
         }
-
-        entity.markStored();
         try {
             if (report != null)
                 report.modify(entity);
@@ -195,25 +204,35 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         if (BatchRepository.capture(entity, FuncType.delete, this)) return;
         if (entity.isStored()) return;
         String streamName = streamNameFor(entity.getClass(), entity.getId());
-        if (trashRepository != null)
-            trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
         boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
             session.setSessionFunction(() -> {
+                validateEntity(entity, FuncType.delete);
+                // Trash 必须在验证通过后才写，否则验证失败会留下脏回收数据。
+                if (trashRepository != null)
+                    trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
                 deleteSnapshot(entity);
                 if (!skipES) {
-
                     invalidStream(entity, streamName);
+                } else {
+                    entity.markEventsPersisted(entity.getPendingEvents());
                 }
+                entity.markStored();
             });
         } else {
+            validateEntity(entity, FuncType.delete);
+            // Trash 必须在验证通过后才写，否则验证失败会留下脏回收数据。
+            if (trashRepository != null)
+                trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
             deleteSnapshot(entity);
             if (!skipES) {
                 invalidStream(entity, streamName);
+            } else {
+                entity.markEventsPersisted(entity.getPendingEvents());
             }
+            entity.markStored();
         }
-        entity.markStored();
         try {
             if (report != null)
                 report.delete(entity);
@@ -298,20 +317,32 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
     }
 
     /**
-     * 保存快照
+     * 直接保存快照（接口兼容方法），按添加语义做领域校验。
+     * 注意：修改场景请走 save()，它会按修改语义校验；直接调本方法保存修改后的实体会用错校验语义。
+     * TODO(历史遗留)：快照先于事件流写入，事件 append 失败时快照会超前；
+     * 成功路径依赖 markEventsPersisted 边界做重试，失败重试时事件可重发但快照已更新。
      *
      * @param entity 实体
      */
     @Override
     public void saveSnapshot(Entity entity) {
-        validateEntity(entity, FuncType.add);
+        saveSnapshot(entity, FuncType.add);
+    }
+
+    private void saveSnapshot(Entity entity, FuncType funcType) {
+        validateEntity(entity, funcType);
         String id = streamNameFor(entity.getClass(), entity.getId());
         eventStore.saveSnapshot(id, entity);
     }
 
+    /**
+     * 直接删除快照（接口兼容方法）。删除语义的领域校验由 {@code delete()} 入口负责，
+     * 直接调用本方法请自行先按删除语义校验，方法内不再重复校验。
+     *
+     * @param entity 实体
+     */
     @Override
     public void deleteSnapshot(Entity entity) {
-        validateEntity(entity, FuncType.add);
         Class<?> cla = entity.getClass();
         String streamId = streamNameFor(cla, entity.getId());
         eventStore.deleteSnapshot(streamId, cla);
@@ -339,16 +370,20 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         return String.format("%s-%s", c.getName(), id);
     }
     private void createNewStream(DomainModel<T> entity,String streamName) {
-        convertEventParam(entity);
-        eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+        List<DomainEvent> events = prepareEventSnapshots(entity);
+        // 修复：新增必须先创建元数据，之前错误地直接 append 导致“没有找到元数据”
+        eventStore.createNewStream(streamName, events, (Class<T>) entity.getClass());
+        entity.markEventsPersisted(events);
     }
     private void appendToStream(DomainModel<T> entity,String streamName) {
-        convertEventParam(entity);
-        eventStore.appendEventToStream(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+        List<DomainEvent> events = prepareEventSnapshots(entity);
+        eventStore.appendEventToStream(streamName, events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+        entity.markEventsPersisted(events);
     }
     private void invalidStream(DomainModel<T> entity, String streamName) {
-        convertEventParam(entity);
-        eventStore.invalid(streamName, entity.events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+        List<DomainEvent> events = prepareEventSnapshots(entity);
+        eventStore.invalid(streamName, events, getExpectedVersion(entity.startVersion), (Class<T>) entity.getClass());
+        entity.markEventsPersisted(events);
     }
     private void validateEntity(Entity entity, FuncType funcType) {
         if (entity instanceof IValidate) {
@@ -358,11 +393,21 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
                 throw exception;
         }
     }
-    private void convertEventParam(DomainModel<T> entity) {
-        if (entity.isStored()) return;
-        for(DomainEvent event:entity.getEvents()) {
-            event.convertModelSnapshot(entity);
-        }
+    /**
+     * 为本次待写入事件准备最终实体审计快照，不改变事件定义参数（实字段与动态参数保持发生时数据）。
+     * 必须在实体最终状态确定且领域校验通过后、事件真正写入前调用。
+     */
+    public List<DomainEvent> prepareEventSnapshots(DomainModel<T> entity) {
+        return entity.preparePendingEventSnapshots();
+    }
+
+    /**
+     * 历史方法名，语义同 {@link #prepareEventSnapshots}：只生成审计快照，不转换事件参数。
+     * 保留仅为兼容，名字有误导性，新代码请用 prepareEventSnapshots。
+     */
+    @Deprecated
+    public List<DomainEvent> convertEventParam(DomainModel<T> entity) {
+        return prepareEventSnapshots(entity);
     }
     /**
      * 判断实体是否标记了 {@link SkipEventSourcing} 且 value() == true。

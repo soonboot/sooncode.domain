@@ -28,7 +28,12 @@ public abstract class DomainModel<T> extends Entity {
     @IgnoreField
     protected List<DomainEvent> events;
     /** 持久化标志：true 表示已落库，false 表示有未持久化事件。包级默认可见，由同包持久层读取。 */
+    @IgnoreField
     boolean stored = true;
+    /** events 中已经成功持久化的前缀长度；事件列表本身保留供监控和审计使用。 */
+    @IgnoreField
+    private int persistedEventCount;
+    @IgnoreField
     private int version;
     public int startVersion = 0;
 
@@ -304,11 +309,33 @@ public abstract class DomainModel<T> extends Entity {
 
     /**
      * 公开事件流（不可变视图），便于快照/审计。
+     * 方法级忽略与字段注解互为兜底，避免事件流被序列化进快照与 modelSnapshot。
      */
+    @IgnoreField
     public List<DomainEvent> getEvents() {
         return Collections.unmodifiableList(events);
     }
 
+    /**
+     * 返回当前尚未成功持久化的事件。返回值是防御性副本，避免持久化期间被外部修改。
+     * 该派生属性没有对应字段，必须显式忽略，否则会被 entityToMap 序列化进快照与 modelSnapshot。
+     */
+    @IgnoreField
+    public List<DomainEvent> getPendingEvents() {
+        int start = Math.min(persistedEventCount, events.size());
+        return new ArrayList<>(events.subList(start, events.size()));
+    }
+
+    /** 在最终状态确定后，为本次待持久化事件生成审计快照。 */
+    public List<DomainEvent> preparePendingEventSnapshots() {
+        List<DomainEvent> pending = getPendingEvents();
+        for (DomainEvent event : pending) {
+            event.convertModelSnapshot(this);
+        }
+        return pending;
+    }
+
+    @IgnoreField
     public int getVersion() {
         return version;
     }
@@ -318,12 +345,37 @@ public abstract class DomainModel<T> extends Entity {
     }
 
     /**
-     * 持久化成功后由持久层调用，重置 stored 标志。业务代码不应直接调用。
+     * 仅在对应事件真实写入成功后由持久层调用：把持久化边界快进到 events 末尾并重置 stored 标志。
+     * 业务代码和自定义仓储不应在未实际持久化事件时调用，否则 pending 事件会被静默丢弃。
      */
     public void markStored() {
+        persistedEventCount = events.size();
         this.stored = true;
     }
 
+    /**
+     * 仅在对应事件真正写入成功后推进持久化边界。
+     * 写入失败时不应调用此方法，这样重试仍会得到完整的待持久化事件。
+     */
+    public void markEventsPersisted(List<DomainEvent> persistedEvents) {
+        if (persistedEvents == null || persistedEvents.isEmpty()) {
+            this.stored = persistedEventCount >= events.size();
+            return;
+        }
+        int start = persistedEventCount;
+        if (start + persistedEvents.size() > events.size()) {
+            throw new DomainException("持久化事件超出实体事件列表范围");
+        }
+        for (int i = 0; i < persistedEvents.size(); i++) {
+            if (events.get(start + i) != persistedEvents.get(i)) {
+                throw new DomainException("持久化事件不是实体待持久化事件的连续前缀");
+            }
+        }
+        persistedEventCount += persistedEvents.size();
+        this.stored = persistedEventCount >= events.size();
+    }
+
+    @IgnoreField
     public boolean isStored() {
         return stored;
     }

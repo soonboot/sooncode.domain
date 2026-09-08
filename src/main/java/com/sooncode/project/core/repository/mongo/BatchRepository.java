@@ -31,18 +31,22 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** MongoDB 批量持久化仓储，负责 bulk 写入和事务边界。 */
 public class BatchRepository implements IBatchRepository {
     private final IMongoDBDao dao;
     private final String dbName;
     private final BatchPlanner planner;
+    private final Set<String> initializedSnapshotCollections = ConcurrentHashMap.newKeySet();
 
     public BatchRepository(IMongoDBDao dao, String dbName) {
         if (dao == null) throw new DomainException("Mongo批量仓储未配置数据访问对象");
         this.dao = dao;
         this.dbName = dbName;
         this.planner = new BatchPlanner();
+        initializedSnapshotCollections.add(MongoDocumentMapper.EVENT_SNAPSHOT);
     }
 
     @Override
@@ -53,7 +57,7 @@ public class BatchRepository implements IBatchRepository {
         }
         MongoDBImpl mongoDao = (MongoDBImpl) dao;
         BatchPlan plan = planner.plan(operations);
-        ensureBatchIndexes(operations);
+        ensureCustomSnapshotIndexes(operations);
         ClientSession session = mongoDao.getClient(dbName).startSession();
         try {
             BatchContext context = new BatchContext(session);
@@ -199,19 +203,20 @@ public class BatchRepository implements IBatchRepository {
         }
     }
 
-    private void ensureBatchIndexes(List<BatchOperation> operations) {
-        MongoCollection<Document> metadata = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
-        MongoIndexInitializer.initializeEventMetadata(metadata);
-        MongoCollection<Document> source = dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE);
-        MongoIndexInitializer.initializeEventSource(source);
-        java.util.Set<String> snapshotCollections = new java.util.HashSet<>();
+    private void ensureCustomSnapshotIndexes(List<BatchOperation> operations) {
+        Set<String> snapshotCollections = new java.util.HashSet<>();
         for (BatchOperation operation : operations) {
-            if (!snapshotCollections.add(operation.snapshotCollection())) continue;
-            MongoCollection<Document> snapshots = dao.getCollection(dbName, operation.snapshotCollection());
-            MongoIndexInitializer.initializeSnapshot(snapshots);
+            String collectionName = operation.snapshotCollection();
+            if (snapshotCollections.add(collectionName)) ensureSnapshotIndexes(collectionName);
         }
-        MongoCollection<Document> trash = trashCollection();
-        MongoIndexInitializer.initializeTrash(trash);
+    }
+
+    private void ensureSnapshotIndexes(String collectionName) {
+        synchronized (initializedSnapshotCollections) {
+            if (initializedSnapshotCollections.contains(collectionName)) return;
+            MongoIndexInitializer.initializeSnapshot(dao.getCollection(dbName, collectionName));
+            initializedSnapshotCollections.add(collectionName);
+        }
     }
 
     private EventStream loadMetadata(ClientSession session, String streamName) {

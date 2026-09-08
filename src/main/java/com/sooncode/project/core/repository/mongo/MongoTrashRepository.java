@@ -2,7 +2,6 @@ package com.sooncode.project.core.repository.mongo;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.Indexes;
 import com.sooncode.project.core.annotations.ModelSnapshot;
 import com.sooncode.project.core.trash.ITrashRepository;
 import org.bson.Document;
@@ -24,14 +23,10 @@ public class MongoTrashRepository implements ITrashRepository {
 
     private final IMongoDBDao dao;
     private final String dbName;
-    private boolean indexesCreated = false;
 
     public MongoTrashRepository(IMongoDBDao dao, String dbName) {
         this.dao = dao;
         this.dbName = dbName;
-        // MongoDB 仅通过 getCollection() 不会实际创建集合；提前创建 Trash 集合，
-        // 确保使用默认数据库连接时，即使尚未删除数据，trash 也已经存在。
-        getCollection();
     }
 
     /**
@@ -48,14 +43,7 @@ public class MongoTrashRepository implements ITrashRepository {
     }
 
     private MongoCollection<Document> getCollection() {
-        MongoCollection<Document> col = dao.getCollection(dbName, COLLECTION_NAME);
-        if (!indexesCreated) {
-            MongoIndexInitializer.initializeTrash(col);
-            col.createIndex(Indexes.ascending("entityType"));
-            col.createIndex(Indexes.descending("deleteTime"));
-            indexesCreated = true;
-        }
-        return col;
+        return dao.getCollection(dbName, COLLECTION_NAME);
     }
 
     @Override

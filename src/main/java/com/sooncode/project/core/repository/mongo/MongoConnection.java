@@ -45,6 +45,7 @@ public class MongoConnection implements IDBConnection, IBatchRepositoryProvider 
     }
 
     private void setInstance(MongoEventSourcingRepository repository) {
+        MongoIndexInitializer.initializeCoreIndexes(this.dao, this.dbName);
         MongoSingle.getInstance().mongoDB = this.dao;
         MongoSingle.getInstance().dbName = this.dbName;
         MongoSingle.getInstance().repository = repository;

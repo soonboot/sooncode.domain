@@ -9,6 +9,8 @@ import com.sooncode.project.core.model.ValueObject;
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDate;
@@ -35,12 +37,12 @@ public class EntityConvert {
             if (!map.containsKey(property.getName())) {
                 continue;
             }
-            if (isIgnoredField(target.getClass(), property.getName())) {
+            if (isIgnoredField(target.getClass(), property)) {
                 continue;
             }
             Object value = map.get(property.getName());
             try {
-                Object converted = convertMapValueToTarget(value, property.getPropertyType());
+                Object converted = convertPropertyValue(value, property);
                 property.getWriteMethod().invoke(target, converted);
             } catch (InvocationTargetException e) {
                 throw wrap("对象转换失败", property.getName(), e.getTargetException());
@@ -57,13 +59,19 @@ public class EntityConvert {
      * - Map/List 嵌套 → 递归
      * - DomainModel/ValueObject/SimpleObject → 反射 newInstance 后递归 mapToEntity
      */
-    private static Object convertMapValueToTarget(Object value, Class<?> targetType) throws Exception {
+    /**
+     * 按 JavaBean 属性的实际类型（包括 List&lt;ValueObject&gt; 的泛型元素类型）转换值。
+     * 事件参数和实体反序列化都必须经过同一套转换，否则泛型集合会被原样写成 List&lt;Map&gt;。
+     */
+    public static Object convertPropertyValue(Object value, PropertyDescriptor property) throws Exception {
+        return convertMapValueToTarget(value, property.getPropertyType(), property.getReadMethod() == null
+                ? property.getWriteMethod().getGenericParameterTypes()[0]
+                : property.getReadMethod().getGenericReturnType());
+    }
+
+    private static Object convertMapValueToTarget(Object value, Class<?> targetType, Type genericType) throws Exception {
         if (value == null) {
             return null;
-        }
-        // 同类型直接返回
-        if (targetType.isInstance(value)) {
-            return value;
         }
         if (targetType == String.class) {
             return value.toString();
@@ -72,10 +80,28 @@ public class EntityConvert {
             return BaseTypeConvert.convertValue(value, targetType);
         }
         if (Map.class.isAssignableFrom(targetType) && value instanceof Map) {
-            // 嵌套 Map 保持原状（无法推断 value 类型）；如需强类型请使用 DomainModel 字段
+            // Map 的 key/value 泛型通常无法安全推断，保持递归后的 Map。
             return value;
         }
         if (List.class.isAssignableFrom(targetType) && value instanceof List) {
+            List<?> source = (List<?>) value;
+            List<Object> result = new ArrayList<>(source.size());
+            Type elementType = collectionElementType(genericType);
+            for (Object item : source) {
+                result.add(convertGenericValue(item, elementType));
+            }
+            return result;
+        }
+        if (Set.class.isAssignableFrom(targetType) && value instanceof Collection) {
+            Set<Object> result = new LinkedHashSet<>();
+            Type elementType = collectionElementType(genericType);
+            for (Object item : (Collection<?>) value) {
+                result.add(convertGenericValue(item, elementType));
+            }
+            return result;
+        }
+        // 同类型直接返回。集合必须先经过上面的泛型元素转换。
+        if (targetType.isInstance(value)) {
             return value;
         }
         if (isAssignableFromAny(value.getClass(), DomainModel.class, ValueObject.class, SimpleObject.class)) {
@@ -91,6 +117,31 @@ public class EntityConvert {
         }
         // 兜底：尝试用 BaseTypeConvert（如 toString 后能解析）
         return BaseTypeConvert.convertValue(value, targetType);
+    }
+
+    private static Object convertGenericValue(Object value, Type targetType) throws Exception {
+        if (value == null || targetType == null || targetType == Object.class) {
+            return value;
+        }
+        if (targetType instanceof Class<?>) {
+            return convertMapValueToTarget(value, (Class<?>) targetType, targetType);
+        }
+        if (targetType instanceof ParameterizedType) {
+            ParameterizedType parameterized = (ParameterizedType) targetType;
+            Type rawType = parameterized.getRawType();
+            if (rawType instanceof Class<?>) {
+                return convertMapValueToTarget(value, (Class<?>) rawType, parameterized);
+            }
+        }
+        return value;
+    }
+
+    private static Type collectionElementType(Type genericType) {
+        if (genericType instanceof ParameterizedType) {
+            Type[] arguments = ((ParameterizedType) genericType).getActualTypeArguments();
+            if (arguments.length == 1) return arguments[0];
+        }
+        return null;
     }
 
     // ----------------------- entityToMap -----------------------
@@ -120,7 +171,7 @@ public class EntityConvert {
                 if (property.getReadMethod() == null) {
                     continue;
                 }
-                if (isIgnoredField(sourceObj.getClass(), property.getName())) {
+                if (isIgnoredField(sourceObj.getClass(), property)) {
                     continue;
                 }
                 Object value;
@@ -209,7 +260,7 @@ public class EntityConvert {
         PropertyDescriptor[] targetProperties = ReflectUtils.getBeanSetters(targetObj.getClass());
         PropertyDescriptor[] sourceProperties = ReflectUtils.getBeanGetters(sourceObj.getClass());
         for (PropertyDescriptor sourceProperty : sourceProperties) {
-            if (isIgnoredField(sourceObj.getClass(), sourceProperty.getName())) {
+            if (isIgnoredField(sourceObj.getClass(), sourceProperty)) {
                 continue;
             }
             try {
@@ -266,13 +317,40 @@ public class EntityConvert {
 
     // ----------------------- 工具方法 -----------------------
 
+    private static boolean isIgnoredField(Class<?> clazz, java.beans.PropertyDescriptor property) {
+        return isIgnoredField(clazz, property.getName(), property);
+    }
+
     private static boolean isIgnoredField(Class<?> clazz, String fieldName) {
+        return isIgnoredField(clazz, fieldName, null);
+    }
+
+    /**
+     * 字段注解与 getter/setter 方法注解任一命中即视为忽略。
+     * 无 backing field 的派生属性（如 getPendingEvents）只能靠方法注解排除，
+     * 否则会被 entityToMap 序列化进快照与 modelSnapshot。
+     */
+    private static boolean isIgnoredField(Class<?> clazz, String fieldName,
+                                          java.beans.PropertyDescriptor property) {
         try {
             java.lang.reflect.Field field = findField(clazz, fieldName);
-            return field != null && field.isAnnotationPresent(IgnoreField.class);
-        } catch (Exception e) {
-            return false;
+            if (field != null && field.isAnnotationPresent(IgnoreField.class)) {
+                return true;
+            }
+        } catch (Exception ignored) {
+            // 字段查找失败时继续按方法注解判断，避免派生属性被误序列化。
         }
+        if (property != null) {
+            if (property.getReadMethod() != null
+                    && property.getReadMethod().isAnnotationPresent(IgnoreField.class)) {
+                return true;
+            }
+            if (property.getWriteMethod() != null
+                    && property.getWriteMethod().isAnnotationPresent(IgnoreField.class)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static java.lang.reflect.Field findField(Class<?> clazz, String fieldName) {

@@ -1,6 +1,7 @@
 package com.sooncode.project.core.batcher;
 
 import com.sooncode.project.core.annotations.SkipEventSourcing;
+import com.sooncode.project.core.model.DomainEvent;
 import com.sooncode.project.core.model.DomainException;
 import com.sooncode.project.core.model.DomainModel;
 import com.sooncode.project.core.model.Entity;
@@ -52,12 +53,58 @@ public class BatchRepository<T extends DomainModel> {
         return Batcher.capture(entity, funcType, repository);
     }
 
-    /** 统一提交批量操作。 */
+    /**
+     * 统一提交批量操作。
+     *
+     * <p>有统一批量存储器时：先做批量预处理（校验 + 待持久化事件审计快照），一次提交，
+     * 成功后才推进事件边界，失败不推进以便重试。</p>
+     *
+     * <p>没有统一批量存储器时：逐项复用单实体 API，验证、审计快照与事件边界
+     * 都由单实体 API 负责，这里不再预处理，避免重复验证和重复生成快照。</p>
+     */
     public BatchResult<T> persistOperations(List<BatchOperation> operations, BatchOptions options) {
         if (operations == null || operations.isEmpty()) return new BatchResult<>();
         if (options == null) options = BatchOptions.defaults();
         options.validate();
 
+        if (batchStore != null) {
+            return persistWithBatchStore(operations, options);
+        }
+
+        // 没有统一事件存储器的自定义仓储，逐项复用单实体 API。
+        BatchResult<T> result = new BatchResult<>();
+        boolean trashEnabled = trashRepository != null && trashRepository.isEnabled();
+        if (!options.isAtomic()) {
+            for (BatchOperation operation : operations) {
+                if (operation != null && operation.getType() == BatchOperation.Type.DELETE && trashEnabled) {
+                    throw new DomainException("启用 Trash 的批量删除必须开启事务");
+                }
+            }
+        }
+        for (BatchOperation operation : operations) {
+            if (operation == null) throw new DomainException("批量操作不能为 null");
+            DomainModel entity = operation.getEntity();
+            if (entity == null) throw new DomainException("批量操作实体不能为 null");
+            if (entity.isStored()) {
+                result.incrementSkipped();
+                continue;
+            }
+            List<DomainEvent> pendingBefore = entity.getPendingEvents();
+            persistOne(operation);
+            // 标准 DomainRepository 会在实际写入后推进边界；自定义仓储若没有推进，
+            // 这里补齐，避免下一次批量重复提交同一批事件。
+            List<DomainEvent> stillPending = entity.getPendingEvents();
+            if (sameEvents(stillPending, pendingBefore)) {
+                entity.markEventsPersisted(stillPending);
+            }
+            entity.markStored();
+            result.incrementSuccess();
+        }
+        return result;
+    }
+
+    /** 经由统一批量存储器提交：批量预处理后一次写入，成功后才推进事件边界。 */
+    private BatchResult<T> persistWithBatchStore(List<BatchOperation> operations, BatchOptions options) {
         List<BatchOperation> prepared = new ArrayList<>();
         BatchResult<T> result = new BatchResult<>();
         for (BatchOperation operation : operations) {
@@ -74,8 +121,10 @@ public class BatchRepository<T extends DomainModel> {
                 oldEntity = repository.findByID(entity.getId(), (Class<T>) entity.getClass());
             }
             validateEntity(entity, operation.getFuncType());
+            List<DomainEvent> pendingEvents =
+                    entity.preparePendingEventSnapshots();
             prepared.add(new BatchOperation(operation.getType(), entity, oldEntity,
-                    entity.getEvents(), operation.getExpectedVersion(), isSkipEventSourcing(entity),
+                    pendingEvents, operation.getExpectedVersion(), isSkipEventSourcing(entity),
                     trashRepository != null && trashRepository.isEnabled()));
         }
         if (prepared.isEmpty()) return result;
@@ -88,18 +137,9 @@ public class BatchRepository<T extends DomainModel> {
             }
         }
 
-        if (batchStore != null) {
-            batchStore.persistBatch(prepared, options.isAtomic());
-            for (BatchOperation operation : prepared) {
-                operation.getEntity().markStored();
-                result.incrementSuccess();
-            }
-            return result;
-        }
-
-        // 没有统一事件存储器的自定义仓储，逐项复用单实体 API。
+        batchStore.persistBatch(prepared, options.isAtomic());
         for (BatchOperation operation : prepared) {
-            persistOne(operation);
+            operation.getEntity().markEventsPersisted(operation.getEvents());
             operation.getEntity().markStored();
             result.incrementSuccess();
         }
@@ -133,5 +173,14 @@ public class BatchRepository<T extends DomainModel> {
     private boolean isSkipEventSourcing(DomainModel entity) {
         SkipEventSourcing annotation = entity.getClass().getAnnotation(SkipEventSourcing.class);
         return annotation != null && annotation.value();
+    }
+
+    private boolean sameEvents(List<DomainEvent> first,
+                               List<DomainEvent> second) {
+        if (first.size() != second.size()) return false;
+        for (int i = 0; i < first.size(); i++) {
+            if (first.get(i) != second.get(i)) return false;
+        }
+        return true;
     }
 }

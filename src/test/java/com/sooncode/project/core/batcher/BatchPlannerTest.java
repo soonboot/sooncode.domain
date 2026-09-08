@@ -48,7 +48,7 @@ class BatchPlannerTest {
         BatchPlanner planner = new BatchPlanner();
         TestModel entity = model("same");
 
-        assertThrows(DomainException.class, () -> planner.plan(List.of((BatchOperation) null)));
+        assertThrows(DomainException.class, () -> planner.plan(java.util.Collections.singletonList(null)));
         assertThrows(DomainException.class, () -> planner.plan(List.of(
                 new BatchOperation(BatchOperation.Type.ADD, null, null, null, null, false))));
         assertThrows(DomainException.class, () -> planner.plan(List.of(
