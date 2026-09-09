@@ -270,6 +270,9 @@ public class Batcher<T extends DomainModel> implements IBatcher<T> {
     public static boolean capture(DomainModel entity, FuncType funcType, IDomainRepository repository) {
         Batcher<?> batcher = CURRENT.get();
         if (batcher == null || batcher.repository != repository) return false;
+        if (com.sooncode.project.core.session.SessionManager.contains(entity)) {
+            throw new DomainException("批量 Batcher 与 DomainSession 不能在同一实体上混用: " + entity.getId() + "，请二选一");
+        }
         if (batcher.entityClass != null && !batcher.entityClass.isAssignableFrom(entity.getClass())) return false;
         BatchOperation.Type type;
         switch (funcType) {
@@ -286,6 +289,9 @@ public class Batcher<T extends DomainModel> implements IBatcher<T> {
     public static boolean capture(DomainModel entity, FuncType funcType) {
         Batcher<?> batcher = CURRENT.get();
         if (batcher == null) return false;
+        if (com.sooncode.project.core.session.SessionManager.contains(entity)) {
+            throw new DomainException("批量 Batcher 与 DomainSession 不能在同一实体上混用: " + entity.getId() + "，请二选一");
+        }
         if (batcher.entityClass != null && !batcher.entityClass.isAssignableFrom(entity.getClass())) return false;
         BatchOperation.Type type = typeOf(funcType);
         if (type == null) return false;
@@ -349,8 +355,8 @@ public class Batcher<T extends DomainModel> implements IBatcher<T> {
         }
         operationTypes.put(entity, type);
         operationKeys.put(operationKey, type);
-        DomainModel oldEntity = type == BatchOperation.Type.MODIFY
-                ? repository.findByID(entity.getId(), (Class<T>) entity.getClass()) : null;
+        // oldEntity 延迟到 BatchRepository.persistWithBatchStore 再查询，避免收集期同步读
+        DomainModel oldEntity = null;
         // 不在收集时复制 events。一个实体在同一作用域内可能连续产生多个事件，
         // 提交时读取 entity.events 才能保证事件完整。
         operations.add(new BatchOperation(type, entity, oldEntity, null,

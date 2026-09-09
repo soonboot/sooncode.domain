@@ -10,6 +10,7 @@ import com.sooncode.project.core.model.Entity;
 import com.sooncode.project.core.model.IDomainRepository;
 import com.sooncode.project.core.model.IEventSourcingRepository;
 import com.sooncode.project.core.repository.mongo.MongoSingle;
+import com.sooncode.project.core.batcher.Batcher;
 import com.sooncode.project.core.session.SessionManager;
 import com.sooncode.project.core.utils.BaseTypeConvert;
 import com.sooncode.project.core.utils.ClassUtil;
@@ -90,6 +91,7 @@ public class LookupHandler {
     //监视实体的添加，触发时更新关联字段
     private void monitorEntity(Class cla,Map<Class,LookupHelper> helperMap){
         monitor.ListenEntity(cla).add((en)->{
+            if (Batcher.current() != null) return;
             Entity entity=en.getTargetEntity();
             if(SessionManager.contains(entity)){
                 SessionManager.Get(entity).setSessionFunction(()->{
@@ -99,6 +101,7 @@ public class LookupHandler {
                 updateEntity(cla,entity,helperMap);
             }
         }).modify((en)->{
+            if (Batcher.current() != null) return;
             Entity entity=en.getTargetEntity();
             if(SessionManager.contains(entity)){
                 SessionManager.Get(entity).setSessionFunction(()->{
@@ -115,6 +118,7 @@ public class LookupHandler {
             Class listen=lookupMap.getKey();
             monitor.ListenEntity(listen)
                     .modify((en)->{
+                        if (Batcher.current() != null) return;
                         Entity entity=en.getTargetEntity();
                         if(SessionManager.contains(entity)){
                             SessionManager.Get(entity).setSessionFunction(()->{
@@ -135,6 +139,7 @@ public class LookupHandler {
                         }
 
                     }).delete((en)->{
+                        if (Batcher.current() != null) return;
                         Entity entity=en.getTargetEntity();
                         if(SessionManager.contains(entity)){
                             SessionManager.Get(entity).setSessionFunction(()->{

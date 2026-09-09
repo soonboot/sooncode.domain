@@ -53,11 +53,36 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
 
     @Override
     public void updateMetadata(EventStream stream) {
+        // 兼容旧路径：直接按 id 更新（非 CAS）。单条事务路径已改为走批量仓储的 CAS，此方法仅作回退
         MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
         Map<String, Object> map = MongoDocumentMapper.metadataFields(stream);
         BasicDBObject bson = new BasicDBObject();
         bson.put(MongoDocumentMapper.ID, stream.getId());
         dao.update(col, bson, map);
+    }
+
+    @Override
+    public boolean updateMetadataCAS(EventStream stream, Integer expectedVersion) {
+        MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
+        Map<String, Object> map = MongoDocumentMapper.metadataFields(stream);
+        // 期望版本为 null 时按当前 DB 版本做校验由调用方保证已检查；此处按 expectedVersion 精确过滤
+        org.bson.conversions.Bson filter;
+        if (expectedVersion != null) {
+            filter = com.mongodb.client.model.Filters.and(
+                    com.mongodb.client.model.Filters.eq(MongoDocumentMapper.ID, stream.getId()),
+                    com.mongodb.client.model.Filters.eq(MongoDocumentMapper.VERSION, expectedVersion),
+                    com.mongodb.client.model.Filters.eq(MongoDocumentMapper.INVALID, 0));
+        } else {
+            filter = com.mongodb.client.model.Filters.and(
+                    com.mongodb.client.model.Filters.eq(MongoDocumentMapper.ID, stream.getId()),
+                    com.mongodb.client.model.Filters.eq(MongoDocumentMapper.INVALID, 0));
+        }
+        com.mongodb.client.result.UpdateResult result = col.updateOne(filter, new Document("$set", new Document(map)));
+        if (result.getMatchedCount() == 0) {
+            throw new com.sooncode.project.core.model.CheckForConcurrencyException(
+                    String.format("元数据 CAS 更新失败，预期版本: %s，流: %s", expectedVersion, stream.getId()));
+        }
+        return true;
     }
 
     @Override

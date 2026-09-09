@@ -1,10 +1,12 @@
 package com.sooncode.project.core.model;
 
 import com.sooncode.project.core.annotations.SkipEventSourcing;
+import com.sooncode.project.core.batcher.BatchOperation;
 import com.sooncode.project.core.batcher.BatchRepository;
 import com.sooncode.project.core.finder.Page;
 import com.sooncode.project.core.monitor.FuncType;
 import com.sooncode.project.core.monitor.Monitor;
+import com.sooncode.project.core.session.DomainSession;
 import com.sooncode.project.core.session.ISession;
 import com.sooncode.project.core.session.SessionManager;
 import com.sooncode.project.core.trash.Trash;
@@ -12,6 +14,7 @@ import com.sooncode.project.core.validator.IValidate;
 import com.sooncode.project.core.validator.ModelValidateFailException;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -58,6 +61,8 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         T entity = null;
         if (snapshot != null) {
             entity = (T) snapshot;
+            // 乐观锁必备：把当前持久化版本回填到 startVersion，供 save/delete 做 CAS 校验
+            entity.startVersion = entity.getVersion();
         } else {
             return null;
         }
@@ -87,23 +92,38 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
-            session.setSessionFunction(() -> {
-                saveSnapshot(entity, FuncType.add);
+            // 会话内：收集为 BatchOperation，commit 时统一事务提交，保证原子性
+            if (session instanceof DomainSession) {
+                DomainSession ds = (DomainSession) session;
+                BatchOperation op = new BatchOperation(
+                        BatchOperation.Type.ADD, entity, null, null, null, skipES, true);
+                ds.addOperation(op);
+            } else {
+                session.setSessionFunction(() -> {
+                    saveSnapshot(entity, FuncType.add);
+                    if (!skipES) {
+                        createNewStream(entity, streamName);
+                    } else {
+                        entity.markEventsPersisted(entity.getPendingEvents());
+                    }
+                    entity.markStored();
+                });
+            }
+        } else {
+            // 单条原子路径：优先走批量事务（快照+事件+元数据同一事务，CAS 防并发）
+            if (tryAtomicSingle(com.sooncode.project.core.batcher.BatchOperation.Type.ADD, entity, null, skipES)) {
+                // batch 层已完成校验、快照、markEventsPersisted/markStored
+            } else {
+                // 无批量存储回退：非事务、非 CAS，仅为兼容旧配置。生产环境请通过 Monitor.ConfigDBConnection 配置Mongo以保证原子性
+                // 为减少不一致窗口，先写事件/元数据再写快照
                 if (!skipES) {
                     createNewStream(entity, streamName);
                 } else {
                     entity.markEventsPersisted(entity.getPendingEvents());
                 }
+                saveSnapshot(entity, FuncType.add);
                 entity.markStored();
-            });
-        } else {
-            saveSnapshot(entity, FuncType.add);
-            if (!skipES) {
-                createNewStream(entity, streamName);
-            } else {
-                entity.markEventsPersisted(entity.getPendingEvents());
             }
-            entity.markStored();
         }
         try {
             if (report != null)
@@ -148,23 +168,36 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
-            session.setSessionFunction(() -> {
-                saveSnapshot(entity, FuncType.modify);
+            if (session instanceof DomainSession) {
+                DomainSession ds = (DomainSession) session;
+                Integer expected = entity.startVersion == 0 ? null : entity.startVersion;
+                BatchOperation op = new BatchOperation(
+                        BatchOperation.Type.MODIFY, entity, oldEntity, null, expected, skipES, true);
+                ds.addOperation(op);
+            } else {
+                session.setSessionFunction(() -> {
+                    saveSnapshot(entity, FuncType.modify);
+                    if (!skipES) {
+                        appendToStream(entity, streamName);
+                    } else {
+                        entity.markEventsPersisted(entity.getPendingEvents());
+                    }
+                    entity.markStored();
+                });
+            }
+        } else {
+            Integer expected = entity.startVersion == 0 ? null : entity.startVersion;
+            if (tryAtomicSingle(BatchOperation.Type.MODIFY, entity, oldEntity, skipES, expected)) {
+            } else {
+                // 回退路径已在 EventStore 层补 CAS（updateMetadataCAS），但快照+事件仍非同一事务
                 if (!skipES) {
                     appendToStream(entity, streamName);
                 } else {
                     entity.markEventsPersisted(entity.getPendingEvents());
                 }
+                saveSnapshot(entity, FuncType.modify);
                 entity.markStored();
-            });
-        } else {
-            saveSnapshot(entity, FuncType.modify);
-            if (!skipES) {
-                appendToStream(entity, streamName);
-            } else {
-                entity.markEventsPersisted(entity.getPendingEvents());
             }
-            entity.markStored();
         }
         try {
             if (report != null)
@@ -207,31 +240,42 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         boolean skipES = isSkipEventSourcing(entity);
         if (SessionManager.contains(entity)) {
             ISession session = SessionManager.Get(entity);
-            session.setSessionFunction(() -> {
+            if (session instanceof DomainSession) {
+                DomainSession ds = (DomainSession) session;
+                Integer expected = entity.startVersion == 0 ? null : entity.startVersion;
+                BatchOperation op = new BatchOperation(
+                        BatchOperation.Type.DELETE, entity, null, null, expected, skipES, true);
+                ds.addOperation(op);
+            } else {
+                session.setSessionFunction(() -> {
+                    validateEntity(entity, FuncType.delete);
+                    if (trashRepository != null)
+                        trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
+                    deleteSnapshot(entity);
+                    if (!skipES) {
+                        invalidStream(entity, streamName);
+                    } else {
+                        entity.markEventsPersisted(entity.getPendingEvents());
+                    }
+                    entity.markStored();
+                });
+            }
+        } else {
+            Integer expected = entity.startVersion == 0 ? null : entity.startVersion;
+            if (tryAtomicSingle(com.sooncode.project.core.batcher.BatchOperation.Type.DELETE, entity, null, skipES, expected)) {
+            } else {
+                // 回退路径：trash+快照删除+事件失效非事务，delete 的 CAS 已在 invalid() 中补偿
                 validateEntity(entity, FuncType.delete);
-                // Trash 必须在验证通过后才写，否则验证失败会留下脏回收数据。
-                if (trashRepository != null)
-                    trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
-                deleteSnapshot(entity);
                 if (!skipES) {
                     invalidStream(entity, streamName);
                 } else {
                     entity.markEventsPersisted(entity.getPendingEvents());
                 }
+                if (trashRepository != null)
+                    trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
+                deleteSnapshot(entity);
                 entity.markStored();
-            });
-        } else {
-            validateEntity(entity, FuncType.delete);
-            // Trash 必须在验证通过后才写，否则验证失败会留下脏回收数据。
-            if (trashRepository != null)
-                trashRepository.saveToTrash(entity.getClass(), streamName, entity.getId());
-            deleteSnapshot(entity);
-            if (!skipES) {
-                invalidStream(entity, streamName);
-            } else {
-                entity.markEventsPersisted(entity.getPendingEvents());
             }
-            entity.markStored();
         }
         try {
             if (report != null)
@@ -360,6 +404,34 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             result.add(entity);
         }
         return result;
+    }
+
+    /**
+     * 单条原子提交：通过批量事务保证快照+事件+元数据同一事务且带版本 CAS。
+     * 成功返回 true（已由批量层完成 markEventsPersisted/markStored），失败抛异常。
+     * 无批量存储时返回 false 走回退路径。
+     */
+    private boolean tryAtomicSingle(com.sooncode.project.core.batcher.BatchOperation.Type type, T entity, T oldEntity, boolean skipES) {
+        return tryAtomicSingle(type, entity, oldEntity, skipES, entity.startVersion == 0 ? null : entity.startVersion);
+    }
+
+    private boolean tryAtomicSingle(com.sooncode.project.core.batcher.BatchOperation.Type type, T entity, T oldEntity, boolean skipES, Integer expectedVersion) {
+        if (Monitor.instance == null) return false;
+        com.sooncode.project.core.batcher.BatchRepository<?> batchRepo = Monitor.instance.getBatchRepository();
+        if (batchRepo == null || batchRepo.getBatchStore() == null) return false;
+        // 对于 MODIFY 需要 oldEntity 校验
+        if (type == com.sooncode.project.core.batcher.BatchOperation.Type.MODIFY && oldEntity == null) {
+            oldEntity = findByID(entity.getId(), (Class<T>) entity.getClass());
+        }
+        com.sooncode.project.core.batcher.BatchOperation op = new com.sooncode.project.core.batcher.BatchOperation(
+                type, entity, oldEntity, null, expectedVersion, skipES, trashRepository != null && trashRepository.isEnabled());
+        com.sooncode.project.core.batcher.BatchOptions opts = new com.sooncode.project.core.batcher.BatchOptions().atomic(com.sooncode.project.core.config.InfraConfig.isAtomic()).failureMode(com.sooncode.project.core.batcher.FailureMode.FAIL_FAST).monitor(false);
+        // 批量仓储内部会做校验与事件快照准备，成功后已推进事件边界
+        batchRepo.persistOperations(Collections.singletonList(op), opts);
+        // 成功后同步 startVersion 到新版本，保持会话外乐观锁基准
+        entity.startVersion = entity.getVersion();
+        // 触发监听（单条原本会 Notice）
+        return true;
     }
 
     private Integer getExpectedVersion(int startVersion) {

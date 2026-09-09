@@ -61,17 +61,18 @@ class BatcherTest {
 
     @Test
     void continueRequiresNonAtomicExecution() {
+        // 修复后：CONTINUE + atomic=true 为逐条事务的合法组合（每条独立事务，失败继续下一条）
         RecordingRepository repository = new RecordingRepository("never");
         TestModel model = model("model");
         Batcher<TestModel> batcher = new Batcher<>(TestModel.class, repository)
                 .options(BatchOptions.defaults().atomic(true))
                 .add(model);
 
-        DomainException exception = assertThrows(DomainException.class, batcher::execute);
+        BatchResult<TestModel> result = batcher.execute();
 
-        assertEquals("failureMode=CONTINUE 时 atomic 必须为 false", exception.getMessage());
-        assertTrue(repository.attemptedIds.isEmpty());
-        assertFalse(model.isStored());
+        assertEquals(1, result.getSuccessCount());
+        assertEquals(List.of("model"), repository.attemptedIds);
+        assertTrue(model.isStored());
     }
 
     private static TestModel model(String id) {

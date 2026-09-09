@@ -211,7 +211,10 @@ public abstract class DomainModel<T> extends Entity {
         if (event.getClass().isAnnotationPresent(EventBoot.class)) {
             EventBoot eventBoot = event.getClass().getAnnotation(EventBoot.class);
             FuncType ft = eventBoot.StoreFunc();
-            Batcher.capture(this, ft);
+            // 批量收集：优先由 StoreNotice 统一以 repository 维度捕获；无 Monitor 时回退到无仓储维度的捕获
+            if (Monitor.instance == null) {
+                Batcher.capture(this, ft);
+            }
             if (ft == FuncType.add) {
                 beforeAdd(event);
             } else if (ft == FuncType.modify) {

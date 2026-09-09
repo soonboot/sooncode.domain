@@ -5,38 +5,35 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class SessionManager {
-    private HashMap<String, ISession> SessionList=null;
+    private static final ThreadLocal<Map<String, ISession>> HOLDER = ThreadLocal.withInitial(HashMap::new);
 
-    private SessionManager(){
-        SessionList=new HashMap<>();
-    };
     public static ISession Get(Entity model){
-        SessionManager instance= SessionManager.Singleton.INSTANCE.getInstance();
-        return instance.SessionList.get(instance.getKey(model));
+        if (model == null) return null;
+        return HOLDER.get().get(getKey(model));
     }
     public static void put(Entity model,ISession session){
-        SessionManager instance= SessionManager.Singleton.INSTANCE.getInstance();
-        instance.SessionList.put(instance.getKey(model), session);
+        if (model == null || session == null) return;
+        HOLDER.get().put(getKey(model), session);
     }
     public static void remove(Entity model){
-        SessionManager instance= SessionManager.Singleton.INSTANCE.getInstance();
-        instance.SessionList.remove(instance.getKey(model));
+        if (model == null) return;
+        Map<String, ISession> map = HOLDER.get();
+        map.remove(getKey(model));
+        if (map.isEmpty()) HOLDER.remove();
     }
     public static boolean contains(Entity model){
-        SessionManager instance= SessionManager.Singleton.INSTANCE.getInstance();
-        return instance.SessionList.containsKey(instance.getKey(model));
+        if (model == null) return false;
+        return HOLDER.get().containsKey(getKey(model));
     }
-    private String getKey(Entity model){
+    public static boolean hasActiveSession(){
+        Map<String, ISession> map = HOLDER.get();
+        return !map.isEmpty();
+    }
+    public static void clear(){
+        HOLDER.remove();
+    }
+    private static String getKey(Entity model){
         return model.getClass().getName()+"_"+model.getId();
     }
-    private enum Singleton {
-        INSTANCE;
-        private SessionManager instance;
-        Singleton() {
-            instance = new SessionManager();
-        }
-        public SessionManager getInstance() {
-            return instance;
-        }
-    }
+    private SessionManager(){}
 }

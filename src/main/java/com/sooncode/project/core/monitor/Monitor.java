@@ -1,6 +1,8 @@
 package com.sooncode.project.core.monitor;
 
 import com.sooncode.project.core.annotations.EventBoot;
+import com.sooncode.project.core.batcher.BatchOptions;
+import com.sooncode.project.core.config.InfraConfig;
 import com.sooncode.project.core.batcher.BatchRepository;
 import com.sooncode.project.core.batcher.BatchStore;
 import com.sooncode.project.core.batcher.IBatchRepository;
@@ -69,7 +71,36 @@ public class Monitor {
         batchRepository=new BatchRepository<>(repository);
         storeNotice=new StoreNotice(domainRepository);
     }
+    /** 设置全局是否使用事务（单机 Mongo 需设为 false）。建议在 Monitor.New() 之后、ConfigDBConnection 之前调用。 */
+    public Monitor setAtomic(boolean atomic) {
+        InfraConfig.setAtomic(atomic);
+        return this;
+    }
+    /** 别名：是否使用事务 */
+    public Monitor setTransactional(boolean transactional) {
+        return setAtomic(transactional);
+    }
+    /** 链式：设置事务开关后返回自身，便于 fluent 调用 */
+    public Monitor withAtomic(boolean atomic) {
+        return setAtomic(atomic);
+    }
+    public boolean isAtomic() {
+        return InfraConfig.isAtomic();
+    }
+    public boolean isTransactional() {
+        return InfraConfig.isTransactional();
+    }
     public void ConfigDBConnection(IDBConnection dbConnection) {
+        ConfigDBConnection(dbConnection, (BatchOptions) null);
+    }
+    public void ConfigDBConnection(IDBConnection dbConnection, boolean atomic) {
+        InfraConfig.setAtomic(atomic);
+        ConfigDBConnection(dbConnection, (BatchOptions) null);
+    }
+    public void ConfigDBConnection(IDBConnection dbConnection, BatchOptions options) {
+        if (options != null) {
+            InfraConfig.setAtomic(options.isAtomic());
+        }
         IEventSourcingRepository eventRepository= dbConnection.getRepository();
         IEventStore eventStore=new EventStore(eventRepository);
         Trash trashRepository=new Trash(eventStore);

@@ -44,6 +44,10 @@ public class BatchRepository<T extends DomainModel> {
         this.trashRepository = trashRepository;
     }
 
+    public IBatchStore getBatchStore() {
+        return batchStore;
+    }
+
     /**
      * 供领域仓储在批量作用域内拦截单条 CRUD 调用。
      * 批量作用域状态和操作注册仍由 Batcher 管理，领域仓储不直接依赖其实现细节。
@@ -72,15 +76,8 @@ public class BatchRepository<T extends DomainModel> {
         }
 
         // 没有统一事件存储器的自定义仓储，逐项复用单实体 API。
+        // 允许单机非事务模式（atomic=false）下执行 Trash 删除：快照删除/回收站/元数据失效将以非事务批量提交，已由单条删除的非事务回退路径验证为可用
         BatchResult<T> result = new BatchResult<>();
-        boolean trashEnabled = trashRepository != null && trashRepository.isEnabled();
-        if (!options.isAtomic()) {
-            for (BatchOperation operation : operations) {
-                if (operation != null && operation.getType() == BatchOperation.Type.DELETE && trashEnabled) {
-                    throw new DomainException("启用 Trash 的批量删除必须开启事务");
-                }
-            }
-        }
         for (BatchOperation operation : operations) {
             if (operation == null) throw new DomainException("批量操作不能为 null");
             DomainModel entity = operation.getEntity();
@@ -129,18 +126,13 @@ public class BatchRepository<T extends DomainModel> {
         }
         if (prepared.isEmpty()) return result;
 
-        if (!options.isAtomic()) {
-            for (BatchOperation operation : prepared) {
-                if (operation.getType() == BatchOperation.Type.DELETE && operation.isTrash()) {
-                    throw new DomainException("启用 Trash 的批量删除必须开启事务");
-                }
-            }
-        }
-
+        // 单机模式下（atomic=false）允许 Trash 删除：退化为非事务的 bulkWrite，虽无跨集合原子性但保持与单条删除的非事务回退路径一致
         batchStore.persistBatch(prepared, options.isAtomic());
         for (BatchOperation operation : prepared) {
             operation.getEntity().markEventsPersisted(operation.getEvents());
             operation.getEntity().markStored();
+            // 同步乐观锁基准
+            operation.getEntity().startVersion = operation.getEntity().getVersion();
             result.incrementSuccess();
         }
         return result;

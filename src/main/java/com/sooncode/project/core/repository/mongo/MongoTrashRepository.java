@@ -18,7 +18,7 @@ import java.util.Map;
  * <p>集合名为 {@code trash}，删除实体时保存完整 snapshot doc，恢复时写回原快照集合。</p>
  */
 public class MongoTrashRepository implements ITrashRepository {
-    private static final String COLLECTION_NAME = "trash";
+    private static final String COLLECTION_NAME = "snapshotTrash";
     private static final String DEFAULT_SNAPSHOT_COLLECTION = "eventSnapshot";
 
     private final IMongoDBDao dao;

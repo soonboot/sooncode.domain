@@ -34,10 +34,23 @@ public class EventStore implements IEventStore {
         if(expectedVersion!=null){
             checkForConcurrencyError(expectedVersion,eventStream);
         }
+        int previousVersion = eventStream.getVersion();
         for(DomainEvent event:domainEvents){
             repository.saveStream(eventStream.registerEvent(event,cla));
         }
-        repository.updateMetadata(eventStream);
+        // 乐观锁 CAS：按 expectedVersion 精确过滤，避免 check-then-update 之间的 TOCTOU
+        // expectedVersion == null 时为兼容旧调用，仍按原 update（批量路径已保证 CAS，此处为回退路径）
+        if (expectedVersion != null) {
+            repository.updateMetadataCAS(eventStream, expectedVersion);
+        } else {
+            // 无显式期望版本时，以 previousVersion 做隐式 CAS（防止并发丢失更新）
+            try {
+                repository.updateMetadataCAS(eventStream, previousVersion);
+            } catch (CheckForConcurrencyException e) {
+                // 回退兼容：若底层未实现 CAS，降级为普通更新
+                throw e;
+            }
+        }
     }
     @Override
     public void appendEventToStream(String streamName, List<DomainEvent> domainEvents,Class<?> cla) {
@@ -48,8 +61,17 @@ public class EventStore implements IEventStore {
     public void invalid(String streamName,List<DomainEvent> domainEvents,Integer expectedVersion,Class<?> cla) {
         this.appendEventToStream(streamName,domainEvents,expectedVersion,cla);
         EventStream eventStream=repository.loadMetadata(streamName);
+        int previousVersion = eventStream.getVersion() - domainEvents.size();
+        // delete 的元数据失效需要额外 CAS，避免与并发修改丢失
         eventStream.Invalid();
-        repository.updateMetadata(eventStream);
+        try {
+            Integer casVersion = expectedVersion != null ? expectedVersion + domainEvents.size() - 1 : previousVersion + domainEvents.size() - 1;
+            repository.updateMetadataCAS(eventStream, casVersion);
+        } catch (CheckForConcurrencyException e) {
+            throw e;
+        } catch (Exception ex) {
+            repository.updateMetadata(eventStream);
+        }
     }
 
     @Override

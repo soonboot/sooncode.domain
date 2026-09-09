@@ -62,10 +62,21 @@ public class BatchRepository implements IBatchRepository {
         try {
             BatchContext context = new BatchContext(session);
             if (atomic) {
-                session.withTransaction((TransactionBody<Void>) () -> {
-                    persistPlan(plan, context);
-                    return null;
-                }, TransactionOptions.builder().writeConcern(WriteConcern.MAJORITY).build());
+                try {
+                    session.withTransaction((TransactionBody<Void>) () -> {
+                        persistPlan(plan, context);
+                        return null;
+                    }, TransactionOptions.builder().writeConcern(WriteConcern.MAJORITY).build());
+                } catch (RuntimeException e) {
+                    String msg = e.getMessage() == null ? "" : e.getMessage();
+                    Throwable cause = e.getCause();
+                    String causeMsg = cause != null && cause.getMessage() != null ? cause.getMessage() : "";
+                    String combined = (msg + " " + causeMsg).toLowerCase();
+                    if (combined.contains("transaction numbers") || combined.contains("replica set") || combined.contains("transactions are not supported")) {
+                        throw new DomainException("当前 Mongo 为单机模式不支持事务，已自动回退提示：请在程序启动时配置 InfraConfig.setAtomic(false) 或 Monitor.New().setAtomic(false) 或 -Ddomain.infra.atomic=false；原始错误: " + e.getMessage(), e);
+                    }
+                    throw e;
+                }
             } else {
                 persistPlan(plan, context);
             }

@@ -11,6 +11,8 @@ import java.util.Map;
 public interface IEventSourcingRepository {
     void addMetadata(EventStream stream);
     void updateMetadata(EventStream stream);
+    /** CAS 更新元数据：仅当版本匹配时更新，否则抛 CheckForConcurrencyException。返回是否更新成功。 */
+    default boolean updateMetadataCAS(EventStream stream, Integer expectedVersion) { updateMetadata(stream); return true; }
     void saveStream(EventWrapper stream);
     EventStream loadMetadata(String streamName);
     List<EventWrapper> getStream(String streamName, Integer fromVersion, Integer toVersion);
