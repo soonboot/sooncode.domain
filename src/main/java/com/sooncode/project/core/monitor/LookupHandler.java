@@ -11,7 +11,6 @@ import com.sooncode.project.core.model.Entity;
 import com.sooncode.project.core.model.IDomainRepository;
 import com.sooncode.project.core.model.IEventSourcingRepository;
 import com.sooncode.project.core.repository.mongo.MongoSingle;
-import com.sooncode.project.core.batcher.Batcher;
 import com.sooncode.project.core.session.SessionManager;
 import com.sooncode.project.core.utils.BaseTypeConvert;
 import com.sooncode.project.core.utils.ClassUtil;
