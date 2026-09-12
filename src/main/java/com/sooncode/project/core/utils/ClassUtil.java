@@ -32,12 +32,19 @@ public class ClassUtil {
                         while (jarEntries.hasMoreElements()) {
                             JarEntry jarEntry = jarEntries.nextElement();
                             String jarEntryName = jarEntry.getName();
-                            if (jarEntryName.endsWith(".class")) {
-                                String className = jarEntryName.substring(0, jarEntryName.lastIndexOf(".")).replaceAll("/", ".");
-                                if (isRecursive || className.substring(0, className.lastIndexOf(".")).equals(packageName)) {
-                                    classList.add(Class.forName(className));
-                                }
+                            if (!jarEntryName.endsWith(".class")) continue;
+                            if (isRecursive) {
+                                String packagePath = packageName.replace('.', '/');
+                                if (!packagePath.isEmpty() && !jarEntryName.startsWith(packagePath)) continue;
+                            } else {
+                                String classNameTmp = jarEntryName.substring(0, jarEntryName.lastIndexOf(".")).replaceAll("/", ".");
+                                String pkg = classNameTmp.contains(".") ? classNameTmp.substring(0, classNameTmp.lastIndexOf(".")) : "";
+                                if (!pkg.equals(packageName)) continue;
                             }
+                            String className = jarEntryName.substring(0, jarEntryName.lastIndexOf(".")).replaceAll("/", ".");
+                            try {
+                                classList.add(Class.forName(className));
+                            } catch (Throwable ignore) {}
                         }
                     }
                 }
@@ -63,15 +70,20 @@ public class ClassUtil {
                         JarURLConnection jarURLConnection = (JarURLConnection) url.openConnection();
                         JarFile jarFile = jarURLConnection.getJarFile();
                         Enumeration<JarEntry> jarEntries = jarFile.entries();
+                        String packagePath = packageName.replace('.', '/');
                         while (jarEntries.hasMoreElements()) {
                             JarEntry jarEntry = jarEntries.nextElement();
                             String jarEntryName = jarEntry.getName();
-                            if (jarEntryName.endsWith(".class")) {
-                                String className = jarEntryName.substring(0, jarEntryName.lastIndexOf(".")).replaceAll("/", ".");
+                            if (!jarEntryName.endsWith(".class")) continue;
+                            if (!packagePath.isEmpty() && !jarEntryName.startsWith(packagePath)) continue;
+                            String className = jarEntryName.substring(0, jarEntryName.lastIndexOf(".")).replaceAll("/", ".");
+                            try {
                                 Class<?> cls = Class.forName(className);
                                 if (cls.isAnnotationPresent(annotationClass)) {
                                     classList.add(cls);
                                 }
+                            } catch (Throwable ignore) {
+                                // 跳过无法加载的类（可选依赖、版本不兼容等），避免全量扫描失败
                             }
                         }
                     }

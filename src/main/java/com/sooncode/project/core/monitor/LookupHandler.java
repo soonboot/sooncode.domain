@@ -44,6 +44,7 @@ public class LookupHandler {
     ThreadPoolExecutor threadPool = null;
     final Map<Class, List<LookupHelper>> lookupMap;
     private static volatile boolean shutdownHookRegistered = false;
+    private static final Set<ThreadPoolExecutor> REGISTERED_POOLS = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     // ===== 兼容旧构造：委托到新构造，保留 MongoSingle 回退 =====
     public LookupHandler(String packageName, IDomainRepository repository){
@@ -101,12 +102,27 @@ public class LookupHandler {
     }
 
     private void registerShutdownHook() {
+        REGISTERED_POOLS.add(threadPool);
         if (shutdownHookRegistered) return;
         synchronized (LookupHandler.class) {
-            if (shutdownHookRegistered) return;
+            if (shutdownHookRegistered) {
+                return;
+            }
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                log.info("[Lookup] JVM shutdown, 关闭 lookup 线程池");
-                shutdown();
+                log.info("[Lookup] JVM shutdown, 关闭 lookup 线程池数量={}", REGISTERED_POOLS.size());
+                for (ThreadPoolExecutor p : REGISTERED_POOLS) {
+                    try {
+                        p.shutdown();
+                        if (!p.awaitTermination(10, TimeUnit.SECONDS)) {
+                            p.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        p.shutdownNow();
+                        Thread.currentThread().interrupt();
+                    } catch (Exception e) {
+                        log.warn("[Lookup] 关闭线程池异常: {}", e.getMessage(), e);
+                    }
+                }
             }, "lookup-shutdown-hook"));
             shutdownHookRegistered = true;
         }
@@ -189,12 +205,9 @@ public class LookupHandler {
                     needUpdate = true;
             }
         }
-        // 校验后登记到全局反向索引
+        // 校验后登记到全局反向索引（线程安全 computeIfAbsent，避免 get/put 竞态）
         for(Map.Entry<Class,LookupHelper> e : helperMap.entrySet()){
-            List<LookupHelper> list = lookupMap.get(e.getKey());
-            if(list == null) list = new ArrayList<>();
-            list.add(e.getValue());
-            lookupMap.put(e.getKey(), list);
+            lookupMap.computeIfAbsent(e.getKey(), k -> new CopyOnWriteArrayList<>()).add(e.getValue());
             log.info("[Lookup] 注册关联 {} --({})--> {} 字段数={} localField(s)={}", e.getValue().localModel.getSimpleName(), e.getKey().getSimpleName(), e.getValue().fields.keySet(), e.getValue().fields.values().stream().mapToInt(List::size).sum(), e.getValue().fields.keySet());
         }
         monitorEntity(cla, helperMap);
@@ -301,7 +314,26 @@ public class LookupHandler {
         for(Map.Entry<Class,List<LookupHelper>> entry : lookupMap.entrySet()){
             Class listen = entry.getKey();
             monitor.ListenEntity(listen)
-                    .modify((en)->{
+                    .add((en)->{
+                        Entity entity = en.getTargetEntity();
+                        if(SessionManager.contains(entity)){
+                            SessionManager.Get(entity).setSessionFunction(()->{
+                                for(LookupHelper helper : entry.getValue()) {
+                                    for(Map.Entry<String,List<Field>> localPropertys : helper.fields.entrySet()){
+                                        IFindWrapper finder = new Finder<>(helper.localModel).byField(localPropertys.getKey(), entity.getId());
+                                        runUpdateSnapshot(entity, finder, helper, localPropertys.getValue(), false);
+                                    }
+                                }
+                            });
+                        }else {
+                            for(LookupHelper helper : entry.getValue()) {
+                                for(Map.Entry<String,List<Field>> localPropertys : helper.fields.entrySet()) {
+                                    IFindWrapper finder = new Finder<>(helper.localModel).byField(localPropertys.getKey(), entity.getId());
+                                    runUpdateSnapshot(entity, finder, helper, localPropertys.getValue(), false);
+                                }
+                            }
+                        }
+                    }).modify((en)->{
                         Entity entity = en.getTargetEntity();
                         if(SessionManager.contains(entity)){
                             SessionManager.Get(entity).setSessionFunction(()->{

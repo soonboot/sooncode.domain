@@ -85,8 +85,11 @@ public class BaseTypeConvert {
     }
 
     public static Object def(Class clazz){
+        if(clazz == null) return null;
         if(defMap.containsKey(clazz)) return defMap.get(clazz);
-        if(clazz != null && clazz.isEnum()) return null;
+        // 时间类型删除时应清空为 null 而非当前时间；枚举亦为 null
+        if(clazz == Date.class || clazz == LocalDate.class || clazz == LocalTime.class || clazz == LocalDateTime.class) return null;
+        if(clazz.isEnum()) return null;
         return null;
     }
     public static Object convertToEnum(String o, Class clazz) {
@@ -130,10 +133,7 @@ public class BaseTypeConvert {
         put(Double.class,0d);
         put(boolean.class,false);
         put(Boolean.class,false);
-        put(Date.class,new Date());
-        put(LocalDate.class,LocalDate.now());
-        put(LocalTime.class,LocalTime.now());
-        put(LocalDateTime.class,LocalDateTime.now());
+        // 时间类型不在此固化：delete 时应为 null 且避免启动时固化 now() 导致写入陈旧时间
         put(BigDecimal.class,BigDecimal.ZERO);
         put(BigInteger.class,BigInteger.ZERO);
         put(String.class,"");
