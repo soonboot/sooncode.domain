@@ -16,18 +16,22 @@
 | 场景 | 时机 | 实现 |
 |------|------|------|
 | 正向填充 | 本地模型 `add/modify` | `ListenEntity(localModel)` 回调 `updateEntity()` → `Finder.byId(fk)` → 反射拷贝 → `repository.saveSnapshot(entity)` |
-| 反向同步 | 远端模型 `modify` | `ListenEntity(fromModel).modify` → `Finder(localModel).byField(localField, fromId).count/list/page` → `updateSnapshot()` → 逐条 `saveSnapshot` |
-| 反向清空 | 远端模型 `delete` | 同上，`delete=true` 时用 `BaseTypeConvert.def(targetType)` 清空 |
+| 反向同步 | 远端模型 `add/modify` | `ListenEntity(fromModel).add/modify` → `Finder(localModel).byField(localField, fromId).count/list/page` → `updateSnapshot()` → 逐条 `saveSnapshot` |
+| 反向清空 | 远端模型 `delete` | 同上，`delete=true` 时用 `BaseTypeConvert.def(targetType)` 清空（时间类型为 `null`，String 为 `""`，Number 为 `0`） |
 
 - 批量 `Batcher`：收集阶段 `DomainRepository.capture` 拦截 `Notice`，`execute()` 成功后才 `notifyEntityOperations` → 此时 `Batcher.CURRENT` 已清除，正常触发 Lookup。
 - 会话 `DomainSession`：若 `SessionManager.contains(entity)`，则 `setSessionFunction` 延迟到 commit 后执行。
 
 ## 3. 已修复（本次短期落地）
 
-- **线程池**：`2/10/60s/1000` 有界队列 `CallerRunsPolicy`，`daemon+allowCoreTimeout`，`shutdown hook` 幂等，`RejectedExecutionException` 降级同步，`isTerminated()` 暴露。
+- **线程池**：`2/10/60s/1000` 有界队列 `CallerRunsPolicy`，`daemon+allowCoreTimeout`，`shutdown hook` 多实例聚合关闭（`REGISTERED_POOLS`），`RejectedExecutionException` 降级同步，`isTerminated()` 暴露。
 - **解耦 MongoSingle**：新增 `LookupHandler(pkg, repo, sourceRepo)` 推荐构造；旧构造保留并 `warn`。
 - **启动期 fail-fast**：校验 `fromModel/localField/fromField` 非空、`fromModel extends Entity`、非自环、`localField/fromField` 的 `PropertyDescriptor` 存在且可读（支持继承 `findFieldHierarchically`）。
 - **异常可见**：移除全部 `catch(Exception ignored)`，`updateEntity/updateSnapshot/page/count/list` 均 `log.error/info/debug` + 计数，`saveSnapshot` 单条失败不影响其他。
+- **时间语义**：`BaseTypeConvert.def` 对 `Date/LocalDate/LocalTime/LocalDateTime` 返回 `null`（原为启动时 `now()` 固化值），避免 delete 清空写入陈旧时间。
+- **多实例关闭**：`REGISTERED_POOLS` 聚合所有 `LookupHandler` 线程池，`shutdown hook` 遍历关闭，修复 `static` 单例漏关闭。
+- **jar 扫描**：按 `packageName` 前缀过滤 + `try/catch Throwable` 跳过不可加载类，避免全量 `Class.forName`。
+- **反向 add**：监听 `fromModel.add`（同 `modify` 逻辑），修复先建 local 后建 from 时冗余永久为空。
 - **Monitor**：`RegisterLookupModel` 返回 `LookupHandler` 并新增注入版 `RegisterLookupModel(pkg, sourceRepo)`。
 - **默认值**：`BaseTypeConvert.def` 补齐包装类型 `Integer/Long/Float/Double/Boolean`。
 - **批量短路清理**：移除冗余的 `Batcher.current()!=null` 早退，改为注释说明生命周期；零扫描 `warn`。
