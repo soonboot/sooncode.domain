@@ -71,7 +71,7 @@ public class Monitor {
         batchRepository=new BatchRepository<>(repository);
         storeNotice=new StoreNotice(domainRepository);
     }
-    /** 设置全局是否使用事务（单机 Mongo 需设为 false）。建议在 Monitor.New() 之后、ConfigDBConnection 之前调用。 */
+    /** 设置全局是否使用事务（需事务时设为 true（要求副本集），默认 false 单机开箱即用）。建议在 Monitor.New() 之后、ConfigDBConnection 之前调用。 */
     public Monitor setAtomic(boolean atomic) {
         InfraConfig.setAtomic(atomic);
         return this;
@@ -117,8 +117,16 @@ public class Monitor {
             reportRegister=new ReportRegister();
         return reportRegister.add(cla,repository);
     }
-    public void RegisterLookupModel(String packageName){
-        new LookupHandler(packageName,domainRepository);
+    public LookupHandler RegisterLookupModel(String packageName){
+        return new LookupHandler(packageName,domainRepository);
+    }
+
+    /**
+     * 推荐：显式注入 IEventSourcingRepository，彻底解耦 MongoSingle。
+     * 适用于需要单测或非 Mongo 存储的场景。
+     */
+    public LookupHandler RegisterLookupModel(String packageName, IEventSourcingRepository sourceRepo){
+        return new LookupHandler(packageName, domainRepository, sourceRepo);
     }
     public IDomainRepository getDomainRepository(){
         return domainRepository;

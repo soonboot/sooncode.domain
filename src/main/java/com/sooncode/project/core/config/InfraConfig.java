@@ -16,26 +16,26 @@ import java.util.Properties;
  * </pre>
  * 可通过以下任一方式在程序启动时配置（优先级从高到低）：
  * <ol>
- *   <li>代码显式：{@code InfraConfig.setAtomic(false)} 或 {@code Monitor.New().setAtomic(false)}</li>
- *   <li>JVM 参数：{@code -Ddomain.infra.atomic=false}（别名 {@code -Ddomain.mongo.atomic}, {@code -Ddomain.infra.transactional}）</li>
- *   <li>环境变量：{@code DOMAIN_INFRA_ATOMIC=false}（别名 {@code DOMAIN_MONGO_ATOMIC}）</li>
- *   <li>类路径配置文件：{@code domain-infra.properties} 或 {@code application.properties} 中的 {@code domain.infra.atomic=false}</li>
- *   <li>默认：{@code true}（要求 Mongo 4.2+ 副本集/分片集群，生产环境推荐）</li>
+ *   <li>代码显式：{@code InfraConfig.setAtomic(true)} 或 {@code Monitor.New().setAtomic(true)}</li>
+ *   <li>JVM 参数：{@code -Ddomain.infra.atomic=true}（别名 {@code -Ddomain.mongo.atomic}, {@code -Ddomain.infra.transactional}）</li>
+ *   <li>环境变量：{@code DOMAIN_INFRA_ATOMIC=true}（别名 {@code DOMAIN_MONGO_ATOMIC}）</li>
+ *   <li>类路径配置文件：{@code domain-infra.properties} 或 {@code application.properties} 中的 {@code domain.infra.atomic=true}</li>
+ *   <li>默认：{@code false}（单机/开发环境开箱即用；生产副本集/分片集群需显式设为 true 以启用事务）</li>
  * </ol>
- * 示例（单机开发）：
+ * 示例（需要事务时显式开启，要求副本集/分片集群）：
  * <pre>
  *   // 方式1：代码（推荐，放在 Monitor.New() 之后、ConfigDBConnection 之前）
  *   Monitor monitor = Monitor.New();
- *   monitor.setAtomic(false);
+ *   monitor.setAtomic(true);
  *   monitor.ConfigDBConnection(new MongoConnection("mongodb://localhost:27017/mydb"));
  *
  *   // 方式2：JVM 启动参数
- *   java -Ddomain.infra.atomic=false -jar app.jar
+ *   java -Ddomain.infra.atomic=true -jar app.jar
  *
  *   // 方式3：domain-infra.properties（放在 src/main/resources）
- *   domain.infra.atomic=false
+ *   domain.infra.atomic=true
  * </pre>
- * 关闭后批量与单条均走非事务路径：仍有版本号 CAS，但快照/事件/元数据不再同一事务内原子提交。
+ * 默认关闭事务：单机 Mongo 开箱即用，仍有版本号 CAS；开启后批量与单条均走事务路径，快照/事件/元数据同一事务内原子提交（要求副本集/分片集群）。
  * </p>
  */
 public final class InfraConfig {
@@ -65,7 +65,7 @@ public final class InfraConfig {
             if ("false".equals(t) || "0".equals(t) || "no".equals(t)) return false;
             return Boolean.parseBoolean(t);
         }
-        return true;
+        return false;
     }
 
     private static String loadFromClasspathProperties(String resource, String key) {

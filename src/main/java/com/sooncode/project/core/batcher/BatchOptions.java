@@ -6,7 +6,7 @@ import com.sooncode.project.core.model.DomainException;
  * 批量持久化选项。
  */
 public class BatchOptions {
-    private boolean atomic = true;
+    private boolean atomic = false;
     /**
      * 是否在批量提交成功后触发 Monitor 监听（实体监听 + 领域事件）。
      * {@code true}（默认）：批量提交成功后按 {@link com.sooncode.project.core.monitor.Monitor} 语义触发
@@ -86,12 +86,12 @@ public class BatchOptions {
     }
 
     public static BatchOptions defaults() {
-        // 读取全局事务开关：单机 Mongo（非副本集）需在启动时设为 false，否则批量事务会在 withTransaction 抛 replica set 异常
+        // 读取全局事务开关：默认 false（单机开箱即用）；需事务时通过 InfraConfig/Monitor.setAtomic(true) 或 -Ddomain.infra.atomic=true 显式开启
         return new BatchOptions().atomic(com.sooncode.project.core.config.InfraConfig.isAtomic());
     }
 
     /**
-     * 是否使用 MongoDB 事务。默认为开启；需要副本集或 MongoDB Atlas，未配置副本集时请显式置为 false。
+     * 是否使用 MongoDB 事务。默认为关闭（单机开箱即用）；需要副本集或 MongoDB Atlas 时请显式置为 true。
      */
     public boolean atomic() {
         return atomic;

@@ -121,10 +121,15 @@ public class BaseTypeConvert {
     }
     private static final Map<Class,Object> defMap=new HashMap<Class,Object>(){{
         put(int.class,0);
-        put(long.class,0);
-        put(float.class,0);
-        put(double.class,0);
+        put(Integer.class,0);
+        put(long.class,0L);
+        put(Long.class,0L);
+        put(float.class,0f);
+        put(Float.class,0f);
+        put(double.class,0d);
+        put(Double.class,0d);
         put(boolean.class,false);
+        put(Boolean.class,false);
         put(Date.class,new Date());
         put(LocalDate.class,LocalDate.now());
         put(LocalTime.class,LocalTime.now());
