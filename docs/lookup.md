@@ -1,6 +1,6 @@
 # @LookupModel + @Lookup 使用约束（短期可落地版本）
 
-> 状态：已修复 P0 异常吞没、线程池泄漏、包扫描脆弱、MongoSingle 强耦合等；剩余“绕过 CAS/事件溯源”、“扇出无限增长”为已知约束，详见下文。
+> 状态：已修复 P0 异常吞没、线程池泄漏、包扫描脆弱、MongoSingle 强耦合、分页 100→500、独立批量不走 Batcher、Monitor 集中可配置、防环/风暴合并等；剩余“绕过 CAS/事件溯源”、“扇出无限增长（已缓解）”为已知约束，详见下文。
 
 ## 1. 语义
 
@@ -16,7 +16,7 @@
 | 场景 | 时机 | 实现 |
 |------|------|------|
 | 正向填充 | 本地模型 `add/modify` | `ListenEntity(localModel)` 回调 `updateEntity()` → `Finder.byId(fk)` → 反射拷贝 → `repository.saveSnapshot(entity)` |
-| 反向同步 | 远端模型 `add/modify` | `ListenEntity(fromModel).add/modify` → `Finder(localModel).byField(localField, fromId).count/list/page` → `updateSnapshot()` → 逐条 `saveSnapshot` |
+| 反向同步 | 远端模型 `add/modify` | `ListenEntity(fromModel).add/modify` → `Finder(localModel).byField(localField, fromId).page(500, sort=_id)` 试探 → 阈值分流(小扇出同步/大扇出异步分页500) → `ILookupBulkWriter.bulkSaveSnapshots` 批量 upsert（失败逐条降级） |
 | 反向清空 | 远端模型 `delete` | 同上，`delete=true` 时用 `BaseTypeConvert.def(targetType)` 清空（时间类型为 `null`，String 为 `""`，Number 为 `0`） |
 
 - 批量 `Batcher`：收集阶段 `DomainRepository.capture` 拦截 `Notice`，`execute()` 成功后才 `notifyEntityOperations` → 此时 `Batcher.CURRENT` 已清除，正常触发 Lookup。
@@ -35,13 +35,17 @@
 - **Monitor**：`RegisterLookupModel` 返回 `LookupHandler` 并新增注入版 `RegisterLookupModel(pkg, sourceRepo)`。
 - **默认值**：`BaseTypeConvert.def` 补齐包装类型 `Integer/Long/Float/Double/Boolean`。
 - **批量短路清理**：移除冗余的 `Batcher.current()!=null` 早退，改为注释说明生命周期；零扫描 `warn`。
+- **分页调优 500**：反向同步由 `count+list` 两次往返改为 `page(500, sort=_id)` 首页试探；`500` 为查询次数/首屏延迟/内存 1:1 对齐 `bulkBatchSize` 的甜点（100→10倍查询↓，1000则单页2次bulk且首屏延迟↑）。
+- **独立批量不走 Batcher**：新增 `ILookupBulkWriter` + `MongoLookupBulkWriter(bulkWrite ReplaceOne upsert ordered:false, batch 500)`，与业务 `Batcher` 彻底隔离（BATCH强一致 vs LOOKUP BEST_EFFORT）；内存判脏收敛后 `bulkSaveSnapshots`，失败降级逐条 `saveSnapshot`。
+- **Monitor集中配置**：`Monitor.lookupPageSize/asyncThreshold/coalesceWindowMs/bulkBatchSize` 默认 `500/10/500ms/500`，通过 `setLookupPageSize` 等或 `withLookupConfig(page, threshold, coalesceMs, batch)` 调整，`LookupHandler` 构造时快照读取（实例字段非 static，避免多实例污染）。
+- **防环/防风暴**：稳定排序 `Sort.ASC(_id)` 防分页漂移；`ThreadLocal REENTRANCY_GUARD` 防同线程重入；`coalesceWindow 500ms + dedup + ScheduledExecutor` 合并高频同一 `fromId` 写入，`inflightKeys` 去重，线程池拒绝降级同步。
 
 ## 4. 仍为已知约束（短期不改，需业务规避）
 
 1. **绕过事件溯源 & CAS**：正/反向均直接 `saveSnapshot`，不走 `DomainRepository.save()` 的版本 `CAS` 与事件流。并发写同一本地实体可能丢失更新；建议：冗余字段所在聚合尽量单一写入方，或业务层对高并发实体加分布式锁。
-2. **扇出无上限保护**：`count < 10` 同步 `list()`，`>=10` 分页异步（100/page），但总量 1w+ 时会产生大量异步任务与全表扫描压力。建议：外键扇出控制在 1k 以内，必要时改为异步消息/ETL。
+2. **扇出无上限保护（已缓解未根除）**：`阈值<10` 同步首批，`>=10` 异步分页（500/page，`_id` 稳定排序，`skip` 分页 `O(skip)`），总量 1w+ 仍会产生多次分页与 bulk 压力；高频同 `fromId` 已由 `500ms` 合并窗口收敛。建议：外键扇出控制在 1w 以内，超大扇出改为异步消息/ETL 或增加业务侧分桶。
 3. **仅等值 `id` 关联**：`localField` 必须精确等于 `fromId`，不支持 `byField` 复合条件或范围查询。
-4. **事务一致性**：反向同步逐条 `saveSnapshot`，失败条目仅计数，不回滚已成功条；批量场景无分布式事务。
+4. **事务一致性**：反向同步为 BEST_EFFORT `bulkWrite(ordered:false)` 批量 upsert，`BulkWriteException` 部分成功已统计，其余失败仅日志计数不回滚；无分布式事务，与 `Batcher` 事务隔离。
 5. **包扫描脆弱**：`ClassUtil.getClassListByAnnotation` 依赖 classpath 文件系统，jar/模块化路径可能扫描不到；启动日志会 `warn` 零结果。
 6. **全局事务默认**：`InfraConfig.isAtomic()` 默认为 `false`（单机开箱即用），生产副本集需显式 `Monitor.New().setAtomic(true)` 或 `-Ddomain.infra.atomic=true`。
 
@@ -51,6 +55,9 @@
 Monitor monitor = Monitor.New();
 monitor.setAtomic(true); // 生产副本集显式开启事务
 monitor.ConfigDBConnection(new MongoConnection("mongodb://.../mydb"));
+// Lookup 分页/批量调优（可选，默认 500/10/500ms/500）
+monitor.withLookupConfig(500, 10, 500L, 500);
+// 或单独调整：monitor.setLookupPageSize(500).setLookupBulkBatchSize(500);
 
 // 显式注入，单测可传 Stub
 LookupHandler handler = monitor.RegisterLookupModel(
@@ -76,6 +83,7 @@ public class Order extends DomainModel<Order> {
 
 ## 6. 后续演进（非短期）
 
-- `IDomainRepository` 增加 `saveSnapshotsBatch(List<Entity>)` / `bulkWrite`，反向同步改为批量 + 事务。
+- ~~`IDomainRepository` 增加 `saveSnapshotsBatch(List<Entity>)` / `bulkWrite`~~ → **已落地独立批量**：`ILookupBulkWriter` + `MongoLookupBulkWriter`（不走 `Batcher`），语义 `BEST_EFFORT upsert`；若需强一致事务批量，可再为 `IDomainRepository` 增加 `saveSnapshotsBatch` 并接入。
+- ~~支持注解 `lookup.batchSize / asyncThreshold` 可配置~~ → **已落地 Monitor 集中配置**：`withLookupConfig(pageSize, asyncThreshold, coalesceMs, bulkBatchSize)`；后续可补充 `-Ddomain.lookup.pageSize` / env 覆盖与扇出熔断阈值可配置。
 - 快照层增加乐观锁版本号，`saveSnapshot` 改为 CAS。
-- 支持注解 `lookup.batchSize / asyncThreshold` 可配置，或改由领域事件异步投递（MQ）。
+- 领域事件改为 MQ 异步投递，彻底削峰。

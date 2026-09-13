@@ -7,6 +7,7 @@ import com.sooncode.project.core.batcher.BatchRepository;
 import com.sooncode.project.core.batcher.BatchStore;
 import com.sooncode.project.core.batcher.IBatchRepository;
 import com.sooncode.project.core.batcher.IBatchRepositoryProvider;
+import com.sooncode.project.core.lookup.LookupHandler;
 import com.sooncode.project.core.model.*;
 import com.sooncode.project.core.trash.Trash;
 
@@ -20,6 +21,7 @@ public class Monitor {
 
     private ICreaterGetter createrGetter;
     public static Monitor instance=null;
+    // ===== Lookup 调优配置：单一数据源为 InfraConfig，Monitor 仅做委托（P1-1 打破 Monitor↔LookupHandler 循环）=====
     private Monitor(){
         entityNotice=new EntityNotice();
         eventNotice=new EventNotice();
@@ -90,6 +92,39 @@ public class Monitor {
     public boolean isTransactional() {
         return InfraConfig.isTransactional();
     }
+    /** Lookup 分页大小，默认 500，委托 InfraConfig（构造后动态生效，需配合 Handler.refreshConfig() 或重建 Handler） */
+    public Monitor setLookupPageSize(int pageSize) {
+        InfraConfig.setLookupPageSize(pageSize);
+        return this;
+    }
+    public int getLookupPageSize() { return InfraConfig.getLookupPageSize(); }
+    /** Lookup 异步阈值，小于该扇出同步执行，默认 10 */
+    public Monitor setLookupAsyncThreshold(int threshold) {
+        InfraConfig.setLookupAsyncThreshold(threshold);
+        return this;
+    }
+    public int getLookupAsyncThreshold() { return InfraConfig.getLookupAsyncThreshold(); }
+    /** Lookup 高频去重窗口（ms），默认 500 */
+    public Monitor setLookupCoalesceWindowMs(long ms) {
+        InfraConfig.setLookupCoalesceWindowMs(ms);
+        return this;
+    }
+    public long getLookupCoalesceWindowMs() { return InfraConfig.getLookupCoalesceWindowMs(); }
+    /** Lookup 批量写每批大小，默认 500（与分页对齐 1:1），委托 InfraConfig 后即时生效 */
+    public Monitor setLookupBulkBatchSize(int batchSize) {
+        InfraConfig.setLookupBulkBatchSize(batchSize);
+        return this;
+    }
+    public int getLookupBulkBatchSize() { return InfraConfig.getLookupBulkBatchSize(); }
+    /** 链式批量配置 Lookup */
+    public Monitor withLookupConfig(int pageSize, int asyncThreshold, long coalesceMs, int bulkBatchSize) {
+        setLookupPageSize(pageSize);
+        setLookupAsyncThreshold(asyncThreshold);
+        setLookupCoalesceWindowMs(coalesceMs);
+        setLookupBulkBatchSize(bulkBatchSize);
+        return this;
+    }
+
     public void ConfigDBConnection(IDBConnection dbConnection) {
         ConfigDBConnection(dbConnection, (BatchOptions) null);
     }

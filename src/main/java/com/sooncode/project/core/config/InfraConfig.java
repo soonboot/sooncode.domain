@@ -102,9 +102,66 @@ public final class InfraConfig {
         setAtomic(enabled);
     }
 
+    // ===== Lookup 调优（单一数据源，Monitor 仅做委托，LookupHandler 直接读这里，打破 Monitor↔LookupHandler 循环）=====
+    private static volatile int lookupPageSize = initLookupInt("domain.lookup.pageSize", 500);
+    private static volatile int lookupAsyncThreshold = initLookupInt("domain.lookup.asyncThreshold", 10);
+    private static volatile long lookupCoalesceWindowMs = initLookupLong("domain.lookup.coalesceWindowMs", 500L);
+    private static volatile int lookupBulkBatchSize = initLookupInt("domain.lookup.bulkBatchSize", 500);
+
+    private static int initLookupInt(String key, int def) {
+        String v = System.getProperty(key);
+        if (v == null) v = loadFromClasspathProperties("domain-infra.properties", key);
+        if (v == null) v = loadFromClasspathProperties("application.properties", key);
+        if (v != null) {
+            try {
+                int n = Integer.parseInt(v.trim());
+                if (n > 0 || key.endsWith("asyncThreshold") && n >= 0) return n;
+            } catch (NumberFormatException ignore) {}
+        }
+        return def;
+    }
+
+    private static long initLookupLong(String key, long def) {
+        String v = System.getProperty(key);
+        if (v == null) v = loadFromClasspathProperties("domain-infra.properties", key);
+        if (v == null) v = loadFromClasspathProperties("application.properties", key);
+        if (v != null) {
+            try {
+                long n = Long.parseLong(v.trim());
+                if (n >= 0) return n;
+            } catch (NumberFormatException ignore) {}
+        }
+        return def;
+    }
+
+    public static int getLookupPageSize() { return lookupPageSize; }
+    public static void setLookupPageSize(int pageSize) {
+        if (pageSize <= 0) throw new IllegalArgumentException("lookupPageSize 必须 >0");
+        lookupPageSize = pageSize;
+    }
+    public static int getLookupAsyncThreshold() { return lookupAsyncThreshold; }
+    public static void setLookupAsyncThreshold(int threshold) {
+        if (threshold < 0) throw new IllegalArgumentException("lookupAsyncThreshold 不能为负");
+        lookupAsyncThreshold = threshold;
+    }
+    public static long getLookupCoalesceWindowMs() { return lookupCoalesceWindowMs; }
+    public static void setLookupCoalesceWindowMs(long ms) {
+        if (ms < 0) throw new IllegalArgumentException("lookupCoalesceWindowMs 不能为负");
+        lookupCoalesceWindowMs = ms;
+    }
+    public static int getLookupBulkBatchSize() { return lookupBulkBatchSize; }
+    public static void setLookupBulkBatchSize(int batchSize) {
+        if (batchSize <= 0) throw new IllegalArgumentException("lookupBulkBatchSize 必须 >0");
+        lookupBulkBatchSize = batchSize;
+    }
+
     /** 供内部重置为默认值（测试用）。会重新读取系统属性/环境变量。 */
     public static void reset() {
         atomic = initAtomic();
+        lookupPageSize = initLookupInt("domain.lookup.pageSize", 500);
+        lookupAsyncThreshold = initLookupInt("domain.lookup.asyncThreshold", 10);
+        lookupCoalesceWindowMs = initLookupLong("domain.lookup.coalesceWindowMs", 500L);
+        lookupBulkBatchSize = initLookupInt("domain.lookup.bulkBatchSize", 500);
     }
 
     /** 基于当前全局配置创建默认 BatchOptions */

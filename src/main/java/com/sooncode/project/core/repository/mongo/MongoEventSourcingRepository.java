@@ -43,6 +43,10 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
         initializedSnapshotCollections.add(MongoDocumentMapper.EVENT_SNAPSHOT);
     }
 
+    // P0-4 暴露给 LookupHandler 的 BulkWriter 构造，避免反射私有字段
+    public IMongoDBDao getDao() { return dao; }
+    public String getDbName() { return dbName; }
+
     ;
 
     @Override

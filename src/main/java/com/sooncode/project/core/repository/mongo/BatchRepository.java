@@ -202,7 +202,7 @@ public class BatchRepository implements IBatchRepository {
             }
             BulkWriteResult result = context.metadata.bulkWrite(context.session, context.metadataWrites);
             if (result.getMatchedCount() < updateCount) {
-                throw new CheckForConcurrencyException("批量更新存在版本冲突或数据已失效");
+                throw new CheckForConcurrencyException("数据更新存在版本冲突或数据已失效");
             }
         }
         if (!context.eventWrites.isEmpty()) context.source.insertMany(context.session, context.eventWrites);
