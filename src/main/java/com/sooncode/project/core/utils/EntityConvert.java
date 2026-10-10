@@ -8,7 +8,9 @@ import com.sooncode.project.core.model.ValueObject;
 
 import java.beans.PropertyDescriptor;
 import java.lang.reflect.Array;
+import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
@@ -83,9 +85,20 @@ public class EntityConvert {
             // Map 的 key/value 泛型通常无法安全推断，保持递归后的 Map。
             return value;
         }
-        if (List.class.isAssignableFrom(targetType) && value instanceof List) {
-            List<?> source = (List<?>) value;
-            List<Object> result = new ArrayList<>(source.size());
+        // 目标是数组（int[] / String[] / Integer[] / VO[] / ArrayList[] 等）：
+        // 来源可以是 Collection（entityToMap 把数组序列化成 List，反序列化时回到数组就走这里），
+        // 也可以是数组（手动构造的 Map 或 List<int[]> 这类嵌套元素）。
+        if (targetType.isArray()) {
+            return convertToArray(value, targetType, genericType);
+        }
+        // 来源是数组、目标是集合（List / Set / Queue / Collection 等）：
+        // 兼容手动构造 Map / 上游直接透传数组的场景。
+        if (value.getClass().isArray() && Collection.class.isAssignableFrom(targetType)) {
+            return convertArrayToCollection(value, targetType, genericType);
+        }
+        if (List.class.isAssignableFrom(targetType) && value instanceof Collection) {
+            Collection<?> source = (Collection<?>) value;
+            List<Object> result = newListForTarget(targetType, source.size());
             Type elementType = collectionElementType(genericType);
             for (Object item : source) {
                 result.add(convertGenericValue(item, elementType));
@@ -93,9 +106,20 @@ public class EntityConvert {
             return result;
         }
         if (Set.class.isAssignableFrom(targetType) && value instanceof Collection) {
-            Set<Object> result = new LinkedHashSet<>();
+            Collection<?> source = (Collection<?>) value;
+            Set<Object> result = newSetForTarget(targetType, source.size());
             Type elementType = collectionElementType(genericType);
-            for (Object item : (Collection<?>) value) {
+            for (Object item : source) {
+                result.add(convertGenericValue(item, elementType));
+            }
+            return result;
+        }
+        // 其他 Collection 实现（Queue / Deque / Collection 接口本身等）：按目标类型实例化。
+        if (Collection.class.isAssignableFrom(targetType) && value instanceof Collection) {
+            Collection<?> source = (Collection<?>) value;
+            Collection<Object> result = newCollectionForTarget(targetType, source.size());
+            Type elementType = collectionElementType(genericType);
+            for (Object item : source) {
                 result.add(convertGenericValue(item, elementType));
             }
             return result;
@@ -105,8 +129,18 @@ public class EntityConvert {
             return value;
         }
         if (isAssignableFromAny(value.getClass(), DomainModel.class, ValueObject.class, SimpleObject.class)) {
+            if (value instanceof Map) {
+                Object nested = targetType.getDeclaredConstructor().newInstance();
+                mapToEntity((Map<String, Object>) value, nested);
+                return nested;
+            }
+            // 值已经是领域对象：同层级直接复用，否则经 Map 中转做跨类型拷贝。
+            if (targetType.isInstance(value)) {
+                return value;
+            }
+            Map<String, Object> snapshot = entityToMap(value);
             Object nested = targetType.getDeclaredConstructor().newInstance();
-            mapToEntity((Map<String, Object>) value, nested);
+            mapToEntity(snapshot, nested);
             return nested;
         }
         if (isAssignableFromAny(targetType, DomainModel.class, ValueObject.class, SimpleObject.class)
@@ -117,6 +151,153 @@ public class EntityConvert {
         }
         // 兜底：尝试用 BaseTypeConvert（如 toString 后能解析）
         return BaseTypeConvert.convertValue(value, targetType);
+    }
+
+    /**
+     * 将 Collection / 数组 / 单值转换为目标数组。
+     * 基本类型数组（int[] / long[] 等）用 {@link Array#set} 逐元素写入，自动处理拆箱，
+     * 不能做 <code>(Object[])</code> 强转。
+     */
+    private static Object convertToArray(Object value, Class<?> targetType, Type genericType) throws Exception {
+        Class<?> componentType = targetType.getComponentType();
+        Type componentGenericType;
+        if (genericType instanceof GenericArrayType) {
+            componentGenericType = ((GenericArrayType) genericType).getGenericComponentType();
+        } else {
+            componentGenericType = componentType;
+        }
+        List<?> source;
+        if (value instanceof Collection) {
+            source = new ArrayList<>((Collection<?>) value);
+        } else if (value != null && value.getClass().isArray()) {
+            int len = Array.getLength(value);
+            List<Object> tmp = new ArrayList<>(len);
+            for (int i = 0; i < len; i++) {
+                tmp.add(Array.get(value, i));
+            }
+            source = tmp;
+        } else {
+            // 单值包装成长度为 1 的数组（如 map 里手写 "1" 给 int[]）。
+            source = Collections.singletonList(value);
+        }
+        Object array = Array.newInstance(componentType, source.size());
+        int i = 0;
+        for (Object item : source) {
+            Array.set(array, i++, convertGenericValue(item, componentGenericType));
+        }
+        return array;
+    }
+
+    /**
+     * 将数组转换为目标集合。元素同样走泛型转换，支持 {@code String[] -> List<Integer>}、
+     * {@code Map[] -> List<ValueObject>} 等。
+     */
+    private static Object convertArrayToCollection(Object value, Class<?> targetType, Type genericType) throws Exception {
+        int len = Array.getLength(value);
+        Type elementType = collectionElementType(genericType);
+        if (List.class.isAssignableFrom(targetType)) {
+            List<Object> result = newListForTarget(targetType, len);
+            for (int i = 0; i < len; i++) {
+                result.add(convertGenericValue(Array.get(value, i), elementType));
+            }
+            return result;
+        }
+        if (Set.class.isAssignableFrom(targetType)) {
+            Set<Object> result = newSetForTarget(targetType, len);
+            for (int i = 0; i < len; i++) {
+                result.add(convertGenericValue(Array.get(value, i), elementType));
+            }
+            return result;
+        }
+        Collection<Object> result = newCollectionForTarget(targetType, len);
+        for (int i = 0; i < len; i++) {
+            result.add(convertGenericValue(Array.get(value, i), elementType));
+        }
+        return result;
+    }
+
+    /**
+     * 按目标 List 类型创建空集合：接口 / 抽象类回退为 ArrayList，
+     * ArrayList / LinkedList 等常用实现保持原类型，其他具体类尝试反射实例化。
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Object> newListForTarget(Class<?> targetType, int size) {
+        if (targetType == List.class || targetType == Collection.class || targetType == Iterable.class
+                || targetType.isInterface() || Modifier.isAbstract(targetType.getModifiers())) {
+            return new ArrayList<>(size);
+        }
+        if (targetType == ArrayList.class) {
+            return new ArrayList<>(size);
+        }
+        if (targetType == LinkedList.class) {
+            return new LinkedList<>();
+        }
+        if (targetType == Vector.class) {
+            return new Vector<>(size);
+        }
+        if (targetType == Stack.class) {
+            return new Stack<>();
+        }
+        try {
+            Object instance = targetType.getDeclaredConstructor().newInstance();
+            if (instance instanceof List) {
+                return (List<Object>) instance;
+            }
+        } catch (Exception ignored) {
+            // 反射失败时回退为 ArrayList，保证可写入。
+        }
+        return new ArrayList<>(size);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Object> newSetForTarget(Class<?> targetType, int size) {
+        if (targetType == Set.class || targetType == Collection.class || targetType == Iterable.class
+                || targetType.isInterface() || Modifier.isAbstract(targetType.getModifiers())) {
+            return new LinkedHashSet<>(size);
+        }
+        if (targetType == HashSet.class || targetType == LinkedHashSet.class) {
+            return new LinkedHashSet<>(size);
+        }
+        if (targetType == TreeSet.class) {
+            return new TreeSet<>();
+        }
+        try {
+            Object instance = targetType.getDeclaredConstructor().newInstance();
+            if (instance instanceof Set) {
+                return (Set<Object>) instance;
+            }
+        } catch (Exception ignored) {
+            // 反射失败时回退为 LinkedHashSet，保证可写入且保留顺序。
+        }
+        return new LinkedHashSet<>(size);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Collection<Object> newCollectionForTarget(Class<?> targetType, int size) {
+        if (targetType.isInterface() || Modifier.isAbstract(targetType.getModifiers())) {
+            if (Set.class.isAssignableFrom(targetType)) {
+                return new LinkedHashSet<>(size);
+            }
+            if (Queue.class.isAssignableFrom(targetType) || Deque.class.isAssignableFrom(targetType)) {
+                return new LinkedList<>();
+            }
+            return new ArrayList<>(size);
+        }
+        try {
+            Object instance = targetType.getDeclaredConstructor().newInstance();
+            if (instance instanceof Collection) {
+                return (Collection<Object>) instance;
+            }
+        } catch (Exception ignored) {
+            // 反射失败时按接口类型回退。
+        }
+        if (Set.class.isAssignableFrom(targetType)) {
+            return new LinkedHashSet<>(size);
+        }
+        if (Queue.class.isAssignableFrom(targetType) || Deque.class.isAssignableFrom(targetType)) {
+            return new LinkedList<>();
+        }
+        return new ArrayList<>(size);
     }
 
     private static Object convertGenericValue(Object value, Type targetType) throws Exception {
@@ -133,7 +314,44 @@ public class EntityConvert {
                 return convertMapValueToTarget(value, (Class<?>) rawType, parameterized);
             }
         }
+        if (targetType instanceof GenericArrayType) {
+            GenericArrayType arrayType = (GenericArrayType) targetType;
+            Type componentType = arrayType.getGenericComponentType();
+            Class<?> componentClass = componentClassOf(componentType);
+            List<?> source;
+            if (value instanceof Collection) {
+                source = new ArrayList<>((Collection<?>) value);
+            } else if (value != null && value.getClass().isArray()) {
+                int len = Array.getLength(value);
+                List<Object> tmp = new ArrayList<>(len);
+                for (int i = 0; i < len; i++) {
+                    tmp.add(Array.get(value, i));
+                }
+                source = tmp;
+            } else {
+                source = Collections.singletonList(value);
+            }
+            Object array = Array.newInstance(componentClass, source.size());
+            int i = 0;
+            for (Object item : source) {
+                Array.set(array, i++, convertGenericValue(item, componentType));
+            }
+            return array;
+        }
         return value;
+    }
+
+    private static Class<?> componentClassOf(Type componentType) {
+        if (componentType instanceof Class<?>) {
+            return (Class<?>) componentType;
+        }
+        if (componentType instanceof ParameterizedType) {
+            Type rawType = ((ParameterizedType) componentType).getRawType();
+            if (rawType instanceof Class<?>) {
+                return (Class<?>) rawType;
+            }
+        }
+        return Object.class;
     }
 
     private static Type collectionElementType(Type genericType) {

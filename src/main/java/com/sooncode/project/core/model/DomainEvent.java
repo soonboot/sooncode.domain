@@ -274,7 +274,8 @@ public abstract class DomainEvent implements Serializable {
                 continue;
             }
             Object value = entry.getValue();
-            if (value == null) {
+            //todo 这里需要解决如果是需要为字段赋空值与 null 值时，值类型与引用类型判断问题
+            if (value == null||value.equals("")) {
                 continue;
             }
             setPropertyValue(en, target, value);
