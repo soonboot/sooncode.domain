@@ -368,6 +368,8 @@ public class Order extends BaseDomainModel<Order> {
 DomainSession session = new DomainSession();
 session.add(user1);
 session.add(user2);
+user1.create("Alice");  // 领域行为必须在登记之后调用，会话内延期收集
+user2.create("Bob");
 session.commit();  // persists all at once / 一次性持久化
 session.rollback(); // discards on error / 回滚
 ```
