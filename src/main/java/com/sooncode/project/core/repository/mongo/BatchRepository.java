@@ -271,7 +271,7 @@ public class BatchRepository implements IBatchRepository {
     }
 
     private MongoCollection<Document> trashCollection() {
-        return dao.getCollection(dbName, "trash");
+        return dao.getCollection(dbName, com.sooncode.project.core.repository.StoreNames.MONGO_TRASH);
     }
 
     private final class BatchContext {

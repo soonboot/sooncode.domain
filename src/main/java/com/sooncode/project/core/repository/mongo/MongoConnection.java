@@ -4,9 +4,12 @@ import com.sooncode.project.core.model.IDBConnection;
 import com.sooncode.project.core.model.IEventSourcingRepository;
 import com.sooncode.project.core.batcher.IBatchRepository;
 import com.sooncode.project.core.batcher.IBatchRepositoryProvider;
+import com.sooncode.project.core.spi.IInfraFactoryProvider;
+import com.sooncode.project.core.spi.InfraContext;
+import com.sooncode.project.core.spi.InfraFactory;
 import com.mongodb.ConnectionString;
 
-public class MongoConnection implements IDBConnection, IBatchRepositoryProvider {
+public class MongoConnection implements IDBConnection, IBatchRepositoryProvider, IInfraFactoryProvider {
     private IMongoDBDao dao;
     private String dbName;
     public MongoConnection(String connectionString){
@@ -44,8 +47,22 @@ public class MongoConnection implements IDBConnection, IBatchRepositoryProvider 
         setInstance(repository);
     }
 
+    /**
+     * 新链路（Abstract Factory）：返回与本连接同 dao/dbName 的整套 Mongo 工厂。
+     * PG 只需实现对等的 {@code PgFactory}，调用方经 {@code InfraFactory} 编程，不再感知 Mongo。
+     */
+    @Override
+    public InfraFactory getInfraFactory() {
+        return new MongoFactory(this.dao, this.dbName);
+    }
+
     private void setInstance(MongoEventSourcingRepository repository) {
         MongoIndexInitializer.initializeCoreIndexes(this.dao, this.dbName);
+        // 同步发布 InfraContext，让 Finder/Lookup 新链路直接复用，老单例链路保持不变
+        try {
+            InfraContext.of(getInfraFactory()).publish();
+        } catch (Exception ignored) {
+        }
         MongoSingle.getInstance().mongoDB = this.dao;
         MongoSingle.getInstance().dbName = this.dbName;
         MongoSingle.getInstance().repository = repository;

@@ -36,7 +36,7 @@ final class MongoIndexInitializer {
         initializeEventMetadata(dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA));
         initializeEventSource(dao.getCollection(dbName, MongoDocumentMapper.EVENT_SOURCE));
         initializeSnapshot(dao.getCollection(dbName, MongoDocumentMapper.EVENT_SNAPSHOT));
-        initializeTrash(dao.getCollection(dbName, "trash"));
+        initializeTrash(dao.getCollection(dbName, com.sooncode.project.core.repository.StoreNames.MONGO_TRASH));
     }
 
     static void initializeEventSource(MongoCollection<Document> collection) {

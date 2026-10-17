@@ -77,6 +77,25 @@ public class LookupHandler {
     }
 
     private static IEventSourcingRepository resolveSourceRepoOrFail() {
+        // 新链路优先：InfraContext（多库/显式注入）。只有 ctx == null 才回退 MongoSingle；
+        // ctx 存在时工厂异常必须透出，禁止吞掉后静默混库（P0-1）。
+        com.sooncode.project.core.spi.InfraContext ctx =
+                com.sooncode.project.core.spi.InfraContext.current();
+        if (ctx != null) {
+            IEventSourcingRepository repo;
+            try {
+                repo = ctx.factory().events();
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new DomainException("LookupHandler: 工厂解析 IEventSourcingRepository 失败 factory="
+                        + ctx.factoryName() + ": " + e.getMessage(), e);
+            }
+            if (repo != null) {
+                return repo;
+            }
+            throw new DomainException("LookupHandler: factory=" + ctx.factoryName() + " 返回的 IEventSourcingRepository 为 null");
+        }
         try {
             MongoSingle single = MongoSingle.getInstance();
             if (single == null || single.getRepository() == null) {
@@ -137,6 +156,25 @@ public class LookupHandler {
     }
 
     private static ILookupBulkWriter createBulkWriter(IEventSourcingRepository sourceRepo, IDomainRepository repository) {
+        // 新链路优先：InfraContext 工厂直接产出匹配的 BulkWriter，不做 instanceof 判断（多库扩展点）。
+        // 工厂返回 null 表示不支持（回退逐条）；工厂抛异常则透出，禁止吞掉后静默混库（P0-1）。
+        com.sooncode.project.core.spi.InfraContext ctx =
+                com.sooncode.project.core.spi.InfraContext.current();
+        if (ctx != null) {
+            try {
+                ILookupBulkWriter w = ctx.factory().lookupWriter(sourceRepo);
+                if (w != null) {
+                    return w;
+                }
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new DomainException("LookupHandler: 工厂创建 ILookupBulkWriter 失败 factory="
+                        + ctx.factoryName() + ": " + e.getMessage(), e);
+            }
+            // 工厂明确返回 null → 回退逐条写入（与无上下文行为一致）
+            return createFallbackBulkWriter(repository);
+        }
         // P1-4 优先 instanceof 直接调用 getter（已为 MongoEventSourcingRepository 暴露 getDao/getDbName），反射仅做旧版兼容
         try {
             if (sourceRepo instanceof MongoEventSourcingRepository mongoRepo) {

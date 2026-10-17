@@ -29,6 +29,21 @@ public class Trash {
      */
     public Trash(IEventStore eventStore) {
         this.eventStore = eventStore;
+        // 新链路优先：InfraContext 工厂产出匹配的 Trash 实现；只有 ctx == null 才回退
+        // Mongo 默认连接。工厂抛异常必须透出，禁止吞掉后把回收站静默写进错库（P0-1）。
+        // 工厂返回 null 表示该库不支持 Trash（trashRepository=null，读链路按缺配报错，删链路静默跳过）。
+        com.sooncode.project.core.spi.InfraContext ctx =
+                com.sooncode.project.core.spi.InfraContext.current();
+        if (ctx != null) {
+            try {
+                this.trashRepository = ctx.factory().trash();
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new DomainException("Trash 初始化失败 factory=" + ctx.factoryName() + ": " + e.getMessage(), e);
+            }
+            return;
+        }
         this.trashRepository = MongoTrashRepository.fromDefault();
     }
 
@@ -149,9 +164,19 @@ public class Trash {
     }
 
     private void ensureTrashRepository() {
-        if (trashRepository == null) {
-            trashRepository = MongoTrashRepository.fromDefault();
+        if (trashRepository != null) {
+            return;
         }
+        // FACTORY-FIRST: ctx exists but factory.trash() was null means unsupported.
+        // Must fail explicitly; falling back to Mongo default here would mix databases.
+        // Only the legacy path (no context) may use the Mongo default.
+        com.sooncode.project.core.spi.InfraContext ctx =
+                com.sooncode.project.core.spi.InfraContext.current();
+        if (ctx != null) {
+            throw new DomainException("Trash unavailable: factory=" + ctx.factoryName()
+                    + " does not support Trash (trash() returned null)");
+        }
+        trashRepository = MongoTrashRepository.fromDefault();
         if (trashRepository == null)
             throw new DomainException("TrashRepository not configured");
     }

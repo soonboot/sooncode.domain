@@ -4,7 +4,7 @@ import com.sooncode.project.core.model.DomainException;
 import com.sooncode.project.core.model.DomainModel;
 import com.sooncode.project.core.model.IDomainRepository;
 import com.sooncode.project.core.monitor.Monitor;
-import com.sooncode.project.core.repository.mongo.FindRepository;
+import com.sooncode.project.core.spi.InfraContext;
 import org.apache.commons.lang3.StringUtils;
 
 import java.lang.reflect.ParameterizedType;
@@ -26,8 +26,65 @@ public class Finder<T extends DomainModel<T>> implements
     }
 
     private void init(Class<T> cla,boolean removeIsDefault){
-        findWrapper=new FindWrapper<>(new FindRepository<>(cla),removeIsDefault);
+        init(cla, resolveRepository(cla), removeIsDefault);
+    }
+
+    private void init(Class<T> cla, IFindRepository<T> repository, boolean removeIsDefault){
+        findWrapper=new FindWrapper<>(repository,removeIsDefault);
         find=new Find<T>(findWrapper,cla);
+    }
+
+    /**
+     * DI 构造（推荐）：显式传入查询仓储，多数据库/单测/双库并存请用它。
+     * 老构造 {@code new Finder<>(X.class)} 行为不变，内部走 {@link #resolveRepository(Class)}。
+     */
+    public Finder(Class<T> cla, IFindRepository<T> repository){
+        this(cla, repository, true);
+    }
+
+    /**
+     * DI 构造（推荐）：显式传入查询仓储 + 是否剔除默认值。
+     */
+    public Finder(Class<T> cla, IFindRepository<T> repository, boolean removeIsDefault){
+        if (cla == null) {
+            throw new DomainException("Finder 构造失败：cla 不能为 null");
+        }
+        if (repository == null) {
+            throw new DomainException("Finder 构造失败：IFindRepository 不能为空");
+        }
+        init(cla, repository, removeIsDefault);
+    }
+
+    private static <T extends DomainModel<T>> IFindRepository<T> resolveRepository(Class<T> cla) {
+        // 新链路优先：InfraContext（多库）。只有 ctx == null 时才回退 Mongo 老链路；
+        // ctx 存在时工厂抛的异常必须透出，禁止吞掉后静默混库（P0-1）。
+        InfraContext ctx = InfraContext.current();
+        if (ctx != null) {
+            try {
+                IFindRepository<T> repo = ctx.finds(cla);
+                if (repo == null) {
+                    throw new DomainException("Finder 构造失败：factory=" + ctx.factoryName() + " 返回的 IFindRepository 为 null");
+                }
+                return repo;
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new DomainException("Finder 构造失败 factory=" + ctx.factoryName() + ": " + e.getMessage(), e);
+            }
+        }
+        try {
+            Class<?> mongoRepo = Class.forName("com.sooncode.project.core.repository.mongo.FindRepository");
+            java.lang.reflect.Constructor<?> c = mongoRepo.getConstructor(Class.class);
+            @SuppressWarnings("unchecked")
+            IFindRepository<T> repo = (IFindRepository<T>) c.newInstance(cla);
+            return repo;
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable t = e.getTargetException() != null ? e.getTargetException() : e;
+            if (t instanceof RuntimeException) throw (RuntimeException) t;
+            throw new DomainException(t.getMessage(), t);
+        } catch (Exception e) {
+            throw new DomainException("Finder 构造失败：无法解析 IFindRepository，请先调用 new MongoConnection(...) 或 InfraContext.of(...).publish()，或使用 new Finder<>(cla, repo) 显式注入", e);
+        }
     }
     @Override
     public T byId(String id){

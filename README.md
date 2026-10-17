@@ -483,6 +483,40 @@ This framework is designed to be **AI vibe coding friendly** — LLMs can easily
 | `eventSource` | Append-only event records / 追加写的事件记录 |
 | `eventSnapshot` | Latest snapshot of each aggregate (or custom via `@ModelSnapshot`) / 聚合根最新快照 |
 
+### PostgreSQL (JSONB 文档形态) / PostgreSQL as Document Store
+
+除 MongoDB 外，本框架支持把 PostgreSQL 当文档数据库用（行 + JSONB，行为与 Mongo 侧逐项镜像）：
+`PgConnection` / `PgFactory` 成套产出 Event / Find / Batch / Trash / LookupWriter，
+`Monitor.ConfigDBConnection(IDBConnection)` 与 `Finder` 新链路零改动复用。
+
+```java
+// 方式一：host/port/database（免密本机）/ host + port + database
+PgConnection pg = new PgConnection("localhost", 5432, "mydb", "postgres", "secret");
+monitor.ConfigDBConnection(pg);
+
+// 方式二：JDBC 全串 / full JDBC url
+PgConnection pg2 = new PgConnection("jdbc:postgresql://localhost:5432/mydb", "postgres", "secret");
+monitor.ConfigDBConnection(pg2);
+
+// 方式三：外部 DataSource（不接管关闭）/ bring your own DataSource
+PgConnection pg3 = new PgConnection(dataSource, "public");
+monitor.ConfigDBConnection(pg3);
+```
+
+| 表 / Table | 用途 / Purpose |
+|---|---|
+| `event_metadata` | 事件流元数据（version/invalid，与 Mongo `eventMetadata` 同义） |
+| `event_source` | 追加写的事件记录（含 `event` / `creater` / `description` JSONB） |
+| `event_snapshot` | 聚合根最新快照（默认表，`@ModelSnapshot` 可定制） |
+| `snapshot_trash` | 回收站（文档键名与 Mongo trash 文档一致） |
+
+说明：构造 `PgConnection` 即自动建库建表并发布 `InfraContext`（对标 Mongo 免建库免建表）：
+库不存在时经维护库 `postgres` / `template1` 自动 `CREATE DATABASE`（需连接用户具备
+`CREATEDB` 权限，无权限时抛错提示手动建库；多主机 JDBC 串 / Unix socket 等解析不出
+host-port-database 时退化为直连原库），核心四表与按需快照表由 DDL 自举；查询走
+`snapshot->>'字段'` / 嵌套 `snapshot#>>'{a,b}'` 翻译，数值比较带防爆守卫；
+批量语义与 Mongo 一致（`atomic=true` 单事务回滚，`false` 逐条提交）。
+
 ---
 
 ## 🔧 Build / 构建

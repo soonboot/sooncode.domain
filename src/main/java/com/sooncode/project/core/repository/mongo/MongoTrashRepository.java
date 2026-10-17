@@ -15,11 +15,12 @@ import java.util.Map;
 /**
  * MongoDB Trash 存储库实现。
  *
- * <p>集合名为 {@code trash}，删除实体时保存完整 snapshot doc，恢复时写回原快照集合。</p>
+ * <p>集合名为 {@code snapshotTrash}（见 {@code StoreNames#MONGO_TRASH}），
+ * 删除实体时保存完整 snapshot doc，恢复时写回原快照集合。</p>
  */
 public class MongoTrashRepository implements ITrashRepository {
-    private static final String COLLECTION_NAME = "snapshotTrash";
-    private static final String DEFAULT_SNAPSHOT_COLLECTION = "eventSnapshot";
+    private static final String COLLECTION_NAME = com.sooncode.project.core.repository.StoreNames.MONGO_TRASH;
+    private static final String DEFAULT_SNAPSHOT_COLLECTION = com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT;
 
     private final IMongoDBDao dao;
     private final String dbName;

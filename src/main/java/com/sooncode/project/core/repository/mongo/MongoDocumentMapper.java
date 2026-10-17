@@ -16,9 +16,9 @@ import java.util.Map;
  * 随着版本演进逐渐产生差异。</p>
  */
 final class MongoDocumentMapper {
-    static final String EVENT_METADATA = "eventMetadata";
-    static final String EVENT_SOURCE = "eventSource";
-    static final String EVENT_SNAPSHOT = "eventSnapshot";
+    static final String EVENT_METADATA = com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_METADATA;
+    static final String EVENT_SOURCE = com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SOURCE;
+    static final String EVENT_SNAPSHOT = com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT;
     static final String ID = "id";
     static final String VERSION = "version";
     static final String STREAM_ID = "streamId";

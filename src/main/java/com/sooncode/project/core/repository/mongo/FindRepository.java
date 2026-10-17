@@ -43,26 +43,79 @@ public class FindRepository<T> implements IFindRepository<T> {
     private final String snapshotCollection;
 
     public FindRepository(Class<T> tClass) {
-        this(tClass, "eventSnapshot");
+        this(tClass, com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT);
     }
 
     public FindRepository(Class<T> tClass, String snapshotCollection) {
-        if (tClass == null) {
-            throw new DomainException("FindRepository 构造失败：tClass 不能为 null");
+        this(tClass, resolveMongoPair(), snapshotCollection);
+    }
+
+    /** 中转构造：保证 MongoPair 只解析一次，避免并发 publish 导致 dao/dbName 撕裂。 */
+    private FindRepository(Class<T> tClass, MongoPair pair, String snapshotCollection) {
+        this(tClass, pair.dao, pair.dbName, snapshotCollection);
+    }
+
+    /** dao/dbName 配对：单次读取 InfraContext，避免两次读取之间被并发 publish 撕裂。 */
+    private static final class MongoPair {
+        final IMongoDBDao dao;
+        final String dbName;
+        MongoPair(IMongoDBDao dao, String dbName) {
+            this.dao = dao;
+            this.dbName = dbName;
         }
-        this.tClass = tClass;
+    }
+
+    private static MongoPair resolveMongoPair() {
+        // 新链路优先：InfraContext 必须为 Mongo 工厂；非 Mongo 上下文（如 PgFactory）
+        // 直接显式报错，禁止回退到 MongoSingle 造成跨库混用（P0-2）。
+        com.sooncode.project.core.spi.InfraContext ctx =
+                com.sooncode.project.core.spi.InfraContext.current();
+        if (ctx != null) {
+            if (!(ctx.factory() instanceof MongoFactory)) {
+                throw new DomainException("FindRepository 构造失败：当前 InfraContext 工厂为 "
+                        + ctx.factoryName() + "，mongo.FindRepository 不能在其上下文使用，请改用 ctx.finds(cla)");
+            }
+            return new MongoPair(((MongoFactory) ctx.factory()).dao(), ((MongoFactory) ctx.factory()).dbName());
+        }
         MongoSingle single = MongoSingle.getInstance();
         if (single == null || single.mongoDB == null) {
             throw new DomainException("FindRepository 构造失败：MongoSingle 未初始化，"
-                    + "请先调用 new MongoConnection(...) 完成 MongoDB 配置注入");
+                    + "请先调用 new MongoConnection(...) 或 InfraContext.of(new MongoFactory(...)).publish() 完成配置注入");
         }
         if (single.dbName == null || single.dbName.isEmpty()) {
             throw new DomainException("FindRepository 构造失败：MongoSingle.dbName 未设置");
         }
-        this.dao = single.mongoDB;
-        this.dbName = single.dbName;
-        this.snapshotCollection = snapshotCollection;
+        return new MongoPair(single.mongoDB, single.dbName);
     }
+
+    /**
+     * DI 构造（推荐）：显式传入 dao/dbName，不依赖全局单例。
+     * 多数据库、单测、双库并存场景请使用该构造，{@link MongoFactory#finds(Class)} 即走此路径。
+     */
+    public FindRepository(Class<T> tClass, IMongoDBDao dao, String dbName) {
+        this(tClass, dao, dbName, com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT);
+    }
+
+    /**
+     * DI 构造（推荐）：显式传入 dao/dbName/快照集合名，不依赖全局单例。
+     */
+    public FindRepository(Class<T> tClass, IMongoDBDao dao, String dbName, String snapshotCollection) {
+        if (tClass == null) {
+            throw new DomainException("FindRepository 构造失败：tClass 不能为 null");
+        }
+        if (dao == null) {
+            throw new DomainException("FindRepository 构造失败：dao 不能为空");
+        }
+        if (dbName == null || dbName.isEmpty()) {
+            throw new DomainException("FindRepository 构造失败：dbName 未设置");
+        }
+        this.tClass = tClass;
+        this.dao = dao;
+        this.dbName = dbName;
+        this.snapshotCollection = com.sooncode.project.core.repository.StoreNames.isDefaultMongoSnapshotCollection(snapshotCollection)
+                ? com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT : snapshotCollection;
+    }
+
 
     @Override
     public T first(FindHelper findHelper, Sort sort) {

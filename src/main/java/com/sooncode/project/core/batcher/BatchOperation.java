@@ -97,6 +97,6 @@ public final class BatchOperation {
             if (annotation.value() != null && !annotation.value().isEmpty()) return annotation.value();
             if (annotation.collectionName() != null && !annotation.collectionName().isEmpty()) return annotation.collectionName();
         }
-        return "eventSnapshot";
+        return com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT;
     }
 }
