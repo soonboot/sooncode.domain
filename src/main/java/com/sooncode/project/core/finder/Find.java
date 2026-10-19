@@ -49,7 +49,12 @@ class Find<T  extends DomainModel<T>> implements IFind<T>{
                 Object o = p.getReadMethod().invoke(model);
                 if (o!=null) map.put(p.getName(),o);
             }
-        }catch (Exception ex){ex.printStackTrace();}
+        }catch (Exception ex){
+            com.sooncode.project.core.model.DomainException de =
+                    new com.sooncode.project.core.model.DomainException("byModel 读取实体属性失败:" + model.getClass().getName());
+            de.initCause(ex);
+            throw de;
+        }
         return addField.add(map);
     }
 

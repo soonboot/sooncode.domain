@@ -363,6 +363,101 @@ public class PgFindBuild {
         }
     }
 
+    // ---------------- PG 原生 GIN 加速（加法优化，不改 build() 语义） ----------------
+
+    /**
+     * 为等值查询生成 GIN 可用的 containment 附加条件。
+     *
+     * <p>PG 原生用法：{@code snapshot @> '{"name":"a"}'::jsonb} 可走
+     * {@code USING GIN (snapshot jsonb_path_ops)}，而现有 {@code snapshot->>'f'=?}
+     * 走不上 GIN。两者 AND 叠加后语义不变（containment 是等值的必要条件），
+     * 规划器能先用 GIN 快速过滤再按原表达式精确校验。
+     *
+     * <p>保守起见只对 {@code String} 等值 / IN 生成：数字在 JSON 里可能是 number
+     * 也可能是文本，containment 的类型敏感会误杀 {@code ->>} 文本比较能命中的行；
+     * 字符串两种形态一致，安全。
+     *
+     * @return 0..n 条 {@code snapshot @> ?::jsonb} 子句（无条件时返回空，不影响原 SQL）
+     */
+    public static SqlFilter ginFilters(Class<?> tClass, FindHelper findHelper) {
+        List<String> clauses = new ArrayList<>();
+        List<Object> params = new ArrayList<>();
+        if (tClass == null || findHelper == null) {
+            return new SqlFilter("", params);
+        }
+        LinkedHashMap<String, PropertyDescriptor> properties = new LinkedHashMap<>();
+        for (PropertyDescriptor pd : ReflectUtils.getBeanGetters(tClass)) {
+            properties.put(pd.getName(), pd);
+        }
+        // 旧 andMap 路径（类型以 ValueType 自带为准；null 视为平铺相等）
+        for (Map.Entry<String, List<FindHelper.ValueType>> e : findHelper.andList()) {
+            for (FindHelper.ValueType vt : e.getValue()) {
+                OType t = vt == null ? null : vt.getType();
+                addGinClause(e.getKey(), vt, t, properties, clauses, params);
+            }
+        }
+        // 条件树路径（只处理顶层 AND 下的等值叶子；OR 下加 containment 会改变语义，故跳过）
+        ConditionNode root = findHelper.getRootCondition();
+        if (root instanceof ConditionNode.AndNode) {
+            for (ConditionNode child : ((ConditionNode.AndNode) root).children) {
+                if (child instanceof ConditionNode.FieldCondition) {
+                    ConditionNode.FieldCondition f = (ConditionNode.FieldCondition) child;
+                    OType t = f.valueType == null ? null : f.valueType.getType();
+                    addGinClause(f.fieldName, f.valueType, t, properties, clauses, params);
+                }
+            }
+        }
+        return new SqlFilter(String.join(" AND ", clauses), params);
+    }
+
+    private static void addGinClause(String fieldName, FindHelper.ValueType vt, OType type,
+                                     LinkedHashMap<String, PropertyDescriptor> properties,
+                                     List<String> clauses, List<Object> params) {
+        if (fieldName == null || fieldName.isEmpty()) {
+            return;
+        }
+        String first = fieldName.split("\\.", 2)[0];
+        if (!properties.containsKey(first)) {
+            return;
+        }
+        Object value = vt == null ? null : vt.getValue();
+        if (type == OType.in) {
+            // IN 是析取语义：多值时多个 containment 必须 OR，而本方法是 AND 追加，
+            // 逐值 AND 会恒为假（单行不可能同时包含两个不同值），故保守起见：
+            // 单值 IN 才生成等值 containment，多值直接跳过（原 ->> IN 条件已精确）。
+            List<Object> values = toList(value);
+            if (values.size() == 1 && values.get(0) instanceof String) {
+                clauses.add("snapshot @> ?::jsonb");
+                params.add(containmentJson(fieldName, values.get(0)));
+            }
+            return;
+        }
+        // null type 视为平铺相等（与 singleField 一致），eq 同理
+        if ((type == null || type == OType.eq) && value instanceof String) {
+            clauses.add("snapshot @> ?::jsonb");
+            params.add(containmentJson(fieldName, value));
+        }
+    }
+
+    /**
+     * 字段路径 + 标量 → containment JSON：{@code a.b + "x"} →
+     * {@code {"a":{"b":"x"}}}。只支持字符串标量（见 ginFilters 说明）。
+     */
+    public static String containmentJson(String fieldName, Object value) {
+        String jsonValue = JSONObject.toJSONString(value);
+        String[] segments = fieldName.split("\\.");
+        StringBuilder sb = new StringBuilder();
+        for (int i = segments.length - 1; i >= 0; i--) {
+            String key = segments[i].replace("\\", "\\\\").replace("\"", "");
+            if (sb.length() == 0) {
+                sb.append("{\"").append(key).append("\":").append(jsonValue).append("}");
+            } else {
+                sb = new StringBuilder("{\"").append(key).append("\":").append(sb).append("}");
+            }
+        }
+        return sb.toString();
+    }
+
     /** 供测试与聚合翻译复用的字段存在性校验（属性表由调用方按实体类构建）。 */
     public static Set<String> propertyNames(Class<?> tClass) {
         LinkedHashMap<String, PropertyDescriptor> properties = new LinkedHashMap<>();

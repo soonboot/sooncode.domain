@@ -62,10 +62,14 @@ public class PgLookupBulkWriter implements ILookupBulkWriter {
         }
         String table = PgDocumentMapper.snapshotTable(modelType);
         dao.ensureSnapshotTable(table);
+        // PG 原生：内容相同时跳过 UPDATE，@Lookup 重复推送不再空转 WAL（语义不变）
         String sql = "INSERT INTO " + dao.q(table)
                 + " (stream_id, snapshot_type, snapshot, create_date) VALUES (?,?,?::jsonb,?)"
                 + " ON CONFLICT (stream_id) DO UPDATE SET snapshot_type=EXCLUDED.snapshot_type,"
-                + " snapshot=EXCLUDED.snapshot, create_date=EXCLUDED.create_date";
+                + " snapshot=EXCLUDED.snapshot, create_date=EXCLUDED.create_date"
+                + " WHERE " + dao.q(table) + ".snapshot IS DISTINCT FROM EXCLUDED.snapshot"
+                + " OR " + dao.q(table) + ".snapshot_type IS DISTINCT FROM EXCLUDED.snapshot_type"
+                + " OR " + dao.q(table) + ".create_date IS DISTINCT FROM EXCLUDED.create_date";
         int effectiveBatch = effectiveBatchSize();
         int success = 0;
         try (Connection c = dao.connection()) {

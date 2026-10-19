@@ -61,8 +61,12 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         T entity = null;
         if (snapshot != null) {
             entity = (T) snapshot;
-            // 乐观锁必备：把当前持久化版本回填到 startVersion，供 save/delete 做 CAS 校验
-            entity.startVersion = entity.getVersion();
+            // 乐观锁必备：版本号以元数据为准。快照不持久化 version（@IgnoreField），
+            // Lookup 等路径可能直接 saveSnapshot 绕过事件流，snapshot.getVersion() 恒为 0 不可用。
+            EventStream meta = eventStore.loadMetadata(streamName);
+            int baseVersion = meta != null ? meta.getVersion() : entity.getVersion();
+            entity.setVersion(baseVersion);
+            entity.startVersion = baseVersion;
         } else {
             return null;
         }
@@ -318,7 +322,6 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
     @Override
     public T replay(String id, Class<T> tClass, int toVersion) {
         String streamName = streamNameFor(tClass, id);
-        int fromEventNumber = 0;
         int toEventNumber = toVersion;
         DomainModel snapshot = eventStore.getLatestSnapshot(streamName, tClass);
         T entity = null;
@@ -345,8 +348,13 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
             }
             return entity;
         }
+        // 从快照版本之后开始重放（查询为 version >= from，避免把快照已包含的最后一条事件重复应用）。
+        // 快照不持久化 version 时 getVersion() 为 0，from=1 与 from=0 等价（事件版本号自 1 起），保持全量重放旧行为。
+        int fromEventNumber = (snapshot != null) ? ((DomainModel) snapshot).getVersion() + 1 : 0;
         List<DomainEvent> events = eventStore.getStream(streamName, fromEventNumber, toEventNumber);
+        if (events == null) events = Collections.emptyList();
         ((DomainModel<T>) entity).replay(events, fromEventNumber, toEventNumber);
+        ((DomainModel<T>) entity).startVersion = ((DomainModel<T>) entity).getVersion();
         //*查找大于快照版本的事件,并重放事件.
         if (Monitor.instance != null) {
             try {
@@ -438,6 +446,10 @@ public class DomainRepository<T extends DomainModel> implements IDomainRepositor
         return startVersion == 0 ? null : startVersion;
     }
 
+    /**
+     * 流名分隔符统一为 {@code "-"}（类全名 + "-" + id），与 Trash/Batcher/DomainSession/
+     * PgDocumentMapper/MongoLookupBulkWriter 保持一致，改动需全局同步。
+     */
     private String streamNameFor(Class c, String id) {
         return String.format("%s-%s", c.getName(), id);
     }

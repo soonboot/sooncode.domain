@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-10-19
+
+### Added
+
+- PG 原生加速：`PgFindBuild.ginFilters`（字符串等值 / 单值 IN 生成 `snapshot @> ?::jsonb`，
+  走 `USING GIN (snapshot jsonb_path_ops)`，与原 `->>` 条件 AND 叠加语义不变）；
+  `PgFindRepository.pageAfter` 键集翻页（`(create_date, stream_id)` 游标，深翻页 O(logN)，
+  原 `page()` OFFSET 语义不变）；`page()` 同一连接内跑数据 + COUNT，省一次建连/往返；
+  `PgDao.mergeSnapshotPatch`（`||` 合并补丁 + `IS DISTINCT FROM` 守卫）与 GIN 索引名工具。
+- 用户视角真实库测试补齐（mongo / pgsql 双套，需真实库，默认跳过逻辑已移除）：
+  `MongoUserJourneyTest` / `PgUserJourneyTest`、`MongoFindBuildTest` / `PgFindBuildTest`、
+  `PgDocumentMapperTest`、`MongoRealDbTest` / `PgRealDbTest`（各 18 用例，真库 132 全绿）。
+
+### Fixed
+
+- `ginFilters` 多值 IN 恒空：多值 IN 跳过 containment（单值 IN 才加速），补回归用例。
+- 版本/快照一致性：`DomainRepository.load` 以元数据版本回填（快照不持久化 version，
+  `saveSnapshot` 直写路径 `getVersion()` 恒 0 不可用）；`replay` 从快照版本 +1 开始、
+  空流返回空集合、回填 `startVersion`；`EventStore.getStream` 空返回空集合；
+  `DomainModel.replay` 纯重建（不再 `causes(ReplayEvent)` 污染待持久化事件），
+  `setVersion` 公开给仓储回填；`Find.byModel` 反射失败抛 `DomainException` 不再吞异常；
+  `EventStore.delete` CAS 版本公式修正（`+size` 不再 `-1`）。
+- PG 健壮性：`PgDao` 建表/索引幂等与长标识符截断、`PgTrashRepository` 同事务恢复、
+  `PgLookupBulkWriter` 空参 fail-fast 与 `refresh()` 对齐 Mongo。
+
 ## [1.9.0] - 2026-10-17
 
 ### Added

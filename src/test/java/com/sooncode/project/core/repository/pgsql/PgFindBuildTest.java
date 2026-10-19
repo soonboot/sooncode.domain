@@ -196,6 +196,67 @@ public class PgFindBuildTest {
     }
 
     @Test
+    public void testGinFiltersEqString() {
+        FindHelper h = new FindHelper(false);
+        h.putAnd("name", "apple", OType.eq);
+        PgFindBuild.SqlFilter gin = PgFindBuild.ginFilters(FakeGoods.class, h);
+        assertTrue(gin.sql.contains("snapshot @> ?::jsonb"), "等值字符串应生成 containment: " + gin.sql);
+        assertEquals(1, gin.params.size());
+        assertEquals("{\"name\":\"apple\"}", gin.params.get(0));
+    }
+
+    @Test
+    public void testGinFiltersSkipsNumericAndOr() {
+        FindHelper h = new FindHelper(false);
+        h.putAnd("age", 18, OType.gt);
+        PgFindBuild.SqlFilter gin = PgFindBuild.ginFilters(FakeGoods.class, h);
+        assertTrue(gin.sql.isEmpty(), "数值比较不得生成 containment，避免类型误杀");
+        assertTrue(gin.params.isEmpty());
+
+        FindHelper o = new FindHelper(false);
+        ConditionNode.OrNode or = new ConditionNode.OrNode();
+        or.add(new ConditionNode.FieldCondition("name",
+                new FindHelper.ValueType("a", OType.eq)));
+        o.addRootNode(or);
+        PgFindBuild.SqlFilter ginOr = PgFindBuild.ginFilters(FakeGoods.class, o);
+        assertTrue(ginOr.sql.isEmpty(), "OR 树下不得生成 containment，避免改变语义");
+    }
+
+    @Test
+    public void testGinFiltersMultiValueInSkipped() {
+        // 回归：IN 多值若逐值 AND 叠加 containment，单行恒不满足导致查询恒空；
+        // GIN 只是加速，必须跳过多值 IN（单值 IN 仍可加速）。
+        FindHelper h = new FindHelper(false);
+        h.putAnd("name", Arrays.asList("a", "b"), OType.in);
+        PgFindBuild.SqlFilter gin = PgFindBuild.ginFilters(FakeGoods.class, h);
+        assertTrue(gin.sql.isEmpty(), "多值 IN 不得生成 containment: " + gin.sql);
+        assertTrue(gin.params.isEmpty());
+
+        FindHelper one = new FindHelper(false);
+        one.putAnd("name", Arrays.asList("a"), OType.in);
+        PgFindBuild.SqlFilter ginOne = PgFindBuild.ginFilters(FakeGoods.class, one);
+        assertTrue(ginOne.sql.contains("snapshot @> ?::jsonb"), "单值 IN 可加速: " + ginOne.sql);
+        assertEquals(1, ginOne.params.size());
+    }
+
+    @Test
+    public void testContainmentJsonNested() {
+        assertEquals("{\"a\":{\"b\":\"x\"}}",
+                PgFindBuild.containmentJson("a.b", "x"));
+    }
+
+    @Test
+    public void testSnapshotGinIndexNameFitsPgLimit() {
+        String idx = PgDao.snapshotGinIndexName("event_snapshot");
+        assertEquals("idx_event_snapshot_gin", idx);
+        assertTrue(idx.length() <= 63);
+        String longTable = "a".repeat(63);
+        String longIdx = PgDao.snapshotGinIndexName(longTable);
+        assertTrue(longIdx.length() <= 63, longIdx);
+        assertNotEquals(longIdx, PgDao.snapshotIndexName(longTable));
+    }
+
+    @Test
     public void testSnapshotIndexNameFitsPgLimit() {
         String longTable = "a".repeat(63);
         String idx = PgDao.snapshotIndexName(longTable);

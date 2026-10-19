@@ -86,6 +86,10 @@ public class PgEventSourcingRepository implements IEventSourcingRepository {
     }
 
     @Override
+    /**
+     * CAS 更新元数据。expectedVersion 为 null 时退化为普通更新（仅校验未失效），
+     * 调用方需自行保证已做并发检查；非 null 时按版本精确过滤，失配抛 CheckForConcurrencyException。
+     */
     public boolean updateMetadataCAS(EventStream stream, Integer expectedVersion) {
         String sql = "UPDATE " + dao.q(PgDocumentMapper.EVENT_METADATA)
                 + " SET version=?, invalid=? WHERE id=? AND invalid=0"
@@ -273,14 +277,47 @@ public class PgEventSourcingRepository implements IEventSourcingRepository {
     }
 
     void upsertSnapshot(Connection c, String table, SnapshotWrapper wrapper) throws SQLException {
+        // PG 原生优化：内容完全相同时跳过 UPDATE，避免整列 JSONB + TOAST 无意义重写；
+        // 行不存在时照常插入，内容变化时照常覆盖，用户语义不变。
         String sql = "INSERT INTO " + dao.q(table)
                 + " (stream_id, snapshot_type, snapshot, create_date) VALUES (?,?,?::jsonb,?)"
                 + " ON CONFLICT (stream_id) DO UPDATE SET snapshot_type=EXCLUDED.snapshot_type,"
-                + " snapshot=EXCLUDED.snapshot, create_date=EXCLUDED.create_date";
+                + " snapshot=EXCLUDED.snapshot, create_date=EXCLUDED.create_date"
+                + " WHERE " + dao.q(table) + ".snapshot IS DISTINCT FROM EXCLUDED.snapshot"
+                + " OR " + dao.q(table) + ".snapshot_type IS DISTINCT FROM EXCLUDED.snapshot_type"
+                + " OR " + dao.q(table) + ".create_date IS DISTINCT FROM EXCLUDED.create_date";
         dao.update(c, sql, params(wrapper.getStreamId(),
                 wrapper.getSnapshotType().getName(),
                 PgDocumentMapper.toJson(wrapper.getSnapshot()),
                 PgDao.ts(wrapper.getCreateDate())));
+    }
+
+    /**
+     * PG 原生快照局部合并：只合并补丁顶层键，未提及的键原样保留。
+     *
+     * <p>适用于 {@code @Lookup} 反写这种“大文档小改”的场景：调用方把脏字段拼成
+     * {@code patchJson}（如 {@code {"name":"新名"}}），内部用
+     * {@code snapshot = snapshot || ?::jsonb} 一条语句完成，比全量覆盖少传数据、
+     * 且不会误删并发写入的其它键。快照不存在时按补丁新建一行（调用方需保证补丁自足）。
+     */
+    public void mergeSnapshotPatch(String streamId, String snapshotTable, String snapshotType, String patchJson) {
+        if (streamId == null || streamId.isEmpty()) {
+            throw new com.sooncode.project.core.model.DomainException("合并快照失败：streamId 不能为空");
+        }
+        if (patchJson == null || patchJson.trim().isEmpty()) {
+            throw new com.sooncode.project.core.model.DomainException("合并快照失败：patchJson 不能为空");
+        }
+        String table = PgDocumentMapper.snapshotTable(snapshotTable);
+        dao.ensureSnapshotTable(table);
+        String type = snapshotType == null ? "" : snapshotType;
+        String sql = "INSERT INTO " + dao.q(table)
+                + " (stream_id, snapshot_type, snapshot, create_date) VALUES (?,?,?::jsonb,?)"
+                + " ON CONFLICT (stream_id) DO UPDATE SET snapshot="
+                + dao.q(table) + ".snapshot || EXCLUDED.snapshot,"
+                + " create_date=EXCLUDED.create_date"
+                + " WHERE " + dao.q(table) + ".snapshot IS DISTINCT FROM ("
+                + dao.q(table) + ".snapshot || EXCLUDED.snapshot)";
+        dao.update(sql, params(streamId, type, patchJson, PgDao.ts(new Date())));
     }
 
     @Override

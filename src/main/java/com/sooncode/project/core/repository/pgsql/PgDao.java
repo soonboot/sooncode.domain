@@ -78,6 +78,8 @@ public class PgDao {
         config.setMaximumPoolSize(maxPoolSize > 0 ? maxPoolSize : 10);
         config.setMinimumIdle(1);
         config.setPoolName("sooncode-pgsql");
+        // PG 原生批量优化：JDBC batch 重写为多值 INSERT，减少 roundtrip（用户无感）。
+        config.addDataSourceProperty("reWriteBatchedInserts", "true");
         config.setConnectionTimeout(10_000);
         return new PgDao(new HikariDataSource(config), schema, true);
     }
@@ -264,6 +266,13 @@ public class PgDao {
                 + "description JSONB)");
         execute("CREATE INDEX IF NOT EXISTS idx_event_source_stream ON "
                 + q(PgDocumentMapper.EVENT_SOURCE) + " (stream_id, version)");
+        execute("CREATE INDEX IF NOT EXISTS idx_event_source_created ON "
+                + q(PgDocumentMapper.EVENT_SOURCE) + " (create_date DESC)");
+        // PG 原生：JSONB 倒排，给 @> / ? / jsonpath 查询用；现有 ->> 查询不受影响。
+        execute("CREATE INDEX IF NOT EXISTS idx_event_source_event_gin ON "
+                + q(PgDocumentMapper.EVENT_SOURCE) + " USING GIN (event jsonb_path_ops)");
+        execute("CREATE INDEX IF NOT EXISTS idx_event_metadata_type ON "
+                + q(PgDocumentMapper.EVENT_METADATA) + " (entity_type)");
         ensureSnapshotTable(PgDocumentMapper.DEFAULT_SNAPSHOT_TABLE);
         execute("CREATE TABLE IF NOT EXISTS " + q(PgDocumentMapper.TRASH_TABLE) + " ("
                 + "stream_id TEXT PRIMARY KEY, "
@@ -273,6 +282,10 @@ public class PgDao {
                 + "delete_time TIMESTAMPTZ NOT NULL)");
         execute("CREATE INDEX IF NOT EXISTS idx_snapshot_trash_type ON "
                 + q(PgDocumentMapper.TRASH_TABLE) + " (entity_type)");
+        execute("CREATE INDEX IF NOT EXISTS idx_snapshot_trash_time ON "
+                + q(PgDocumentMapper.TRASH_TABLE) + " (delete_time DESC)");
+        execute("CREATE INDEX IF NOT EXISTS idx_snapshot_trash_doc_gin ON "
+                + q(PgDocumentMapper.TRASH_TABLE) + " USING GIN (snapshot_doc jsonb_path_ops)");
     }
 
     /**
@@ -296,14 +309,26 @@ public class PgDao {
                     + "create_date TIMESTAMPTZ)");
             execute("CREATE INDEX IF NOT EXISTS " + snapshotIndexName(t) + " ON "
                     + q(t) + " (snapshot_type)");
+            execute("CREATE INDEX IF NOT EXISTS " + snapshotGinIndexName(t) + " ON "
+                    + q(t) + " USING GIN (snapshot jsonb_path_ops)");
             initializedTables.add(t);
         }
     }
 
     /**
-     * 快照表的按类型索引名（PG 标识符上限 63 字符）。
+     * 快照表的 JSONB GIN 索引名（PG 标识符上限 63 字符安全，与类型索引互不碰撞）。
      * 超长时截断并缀入表名哈希，避免不同长表名截断后碰撞。
      */
+    static String snapshotGinIndexName(String table) {
+        String base = "idx_" + table + "_gin";
+        if (base.length() <= 63) {
+            return base;
+        }
+        String hash = String.format("%08x", (table + "#gin").hashCode());
+        int keep = 63 - "idx_".length() - "_".length() - hash.length() - "_gin".length();
+        return "idx_" + table.substring(0, Math.max(keep, 0)) + "_" + hash + "_gin";
+    }
+
     static String snapshotIndexName(String table) {
         String base = "idx_" + table + "_type";
         if (base.length() <= 63) {
@@ -375,6 +400,18 @@ public class PgDao {
     public Map<String, Object> queryOne(Connection c, String sql, List<Object> params) throws SQLException {
         List<Map<String, Object>> rows = queryList(c, sql, params);
         return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    public long queryLong(Connection c, String sql, List<Object> params) throws SQLException {
+        Map<String, Object> row = queryOne(c, sql, params);
+        if (row == null || row.isEmpty()) {
+            return 0;
+        }
+        Object v = row.values().iterator().next();
+        if (v instanceof Number) {
+            return ((Number) v).longValue();
+        }
+        return v == null ? 0 : Long.parseLong(v.toString());
     }
 
     public long queryLong(String sql, List<Object> params) {

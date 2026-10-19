@@ -47,7 +47,7 @@ public class EventStore implements IEventStore {
             try {
                 repository.updateMetadataCAS(eventStream, previousVersion);
             } catch (CheckForConcurrencyException e) {
-                // 回退兼容：若底层未实现 CAS，降级为普通更新
+                // 并发冲突直接抛给调用方；底层默认实现为普通更新（不抛此异常），此处无降级路径。
                 throw e;
             }
         }
@@ -65,7 +65,7 @@ public class EventStore implements IEventStore {
         // delete 的元数据失效需要额外 CAS，避免与并发修改丢失
         eventStream.Invalid();
         try {
-            Integer casVersion = expectedVersion != null ? expectedVersion + domainEvents.size() - 1 : previousVersion + domainEvents.size() - 1;
+            Integer casVersion = expectedVersion != null ? expectedVersion + domainEvents.size() : previousVersion + domainEvents.size();
             repository.updateMetadataCAS(eventStream, casVersion);
         } catch (CheckForConcurrencyException e) {
             throw e;
@@ -86,7 +86,7 @@ public class EventStore implements IEventStore {
     @Override
     public List<DomainEvent> getStream(String streamName, int fromVersion, int toVersion) {
         List<EventWrapper> eventWrappers=repository.getStream(streamName,fromVersion,toVersion);
-        if(eventWrappers.size()==0) return null;
+        if(eventWrappers==null||eventWrappers.size()==0) return Collections.emptyList();
         List<DomainEvent> events=new ArrayList<>();
         for(EventWrapper event:eventWrappers){
             events.add(event.getEvent());
@@ -97,6 +97,11 @@ public class EventStore implements IEventStore {
     @Override
     public Page<EventWrapper> getStream(String modelType, String eventType, String creater, int pageSize, int pageIndex) {
         return repository.getStream(modelType,eventType,creater,pageSize,pageIndex);
+    }
+
+    @Override
+    public EventStream loadMetadata(String streamName) {
+        return repository.loadMetadata(streamName);
     }
 
     @Override

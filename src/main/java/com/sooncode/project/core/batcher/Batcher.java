@@ -349,6 +349,7 @@ public class Batcher<T extends DomainModel> implements IBatcher<T> {
             if (oldType != type) throw new DomainException("同一批量中同一实体不能混用操作类型:" + entity.getId());
             return;
         }
+        // key 分隔符统一为 "-"（类全名 + "-" + id），与 streamNameFor 各实现保持一致，改动需全局同步。
         String operationKey = entity.getClass().getName() + "-" + entity.getId();
         if (operationKeys.containsKey(operationKey)) {
             throw new DomainException("同一批量中实体 ID 不能重复:" + entity.getId());

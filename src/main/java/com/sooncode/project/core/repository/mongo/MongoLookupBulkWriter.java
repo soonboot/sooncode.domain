@@ -147,6 +147,7 @@ public class MongoLookupBulkWriter implements ILookupBulkWriter {
         return collectionName;
     }
 
+    /** 流名分隔符统一为 "-"（类全名 + "-" + id），与 DomainRepository/Trash 等保持一致，改动需全局同步。 */
     private String streamNameFor(Class<?> c, String id) {
         return c.getName() + "-" + id;
     }

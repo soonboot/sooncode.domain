@@ -59,6 +59,8 @@ public abstract class DomainModel<T> extends Entity {
 
     /**
      * 应用一段事件流重放聚合根。要求传入的事件按 version 升序排列；本方法会再排一次保证稳定。
+     * 纯重建语义：只 {@code apply} 不 {@code causes}，不产生待持久化事件、不改 stored/持久化边界；
+     * fromVersion/toVersion 仅保留签名兼容，不参与过滤。
      *
      * @param events      事件列表
      * @param fromVersion 起始 version（仅记录，不参与过滤）
@@ -73,7 +75,6 @@ public abstract class DomainModel<T> extends Entity {
                 apply(event);
             }
         }
-        causes(new ReplayEvent(getId(), this, fromVersion, toVersion));
     }
 
     /**
@@ -343,7 +344,11 @@ public abstract class DomainModel<T> extends Entity {
         return version;
     }
 
-    void setVersion(int version) {
+    /**
+     * 由仓储层在加载快照/恢复时以元数据版本回填（快照不持久化 version）。
+     * 业务代码不应直接调用。
+     */
+    public void setVersion(int version) {
         this.version = version;
     }
 
@@ -384,7 +389,9 @@ public abstract class DomainModel<T> extends Entity {
     }
 
     /**
-     * 从事件中提取 version（无 getter 约定的兜底为 0），用于 replay 排序。
+     * 从事件中提取 version，用于 replay 排序。
+     * 普通业务事件自身无 version 字段（版本号由聚合根累计），此处对无 getVersion 约定的事件兜底返回 0，
+     * 即排序为 no-op、保持原有相对顺序；只有 ReplayEvent 等显式携带版本信息的事件才真正参与排序。
      */
     private static int extractVersion(DomainEvent event) {
         if (event instanceof ReplayEvent) {

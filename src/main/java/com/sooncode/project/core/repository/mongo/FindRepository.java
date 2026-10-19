@@ -93,7 +93,7 @@ public class FindRepository<T> implements IFindRepository<T> {
      * 多数据库、单测、双库并存场景请使用该构造，{@link MongoFactory#finds(Class)} 即走此路径。
      */
     public FindRepository(Class<T> tClass, IMongoDBDao dao, String dbName) {
-        this(tClass, dao, dbName, com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT);
+        this(tClass, dao, dbName, snapshotCollectionFor(tClass));
     }
 
     /**
@@ -112,8 +112,34 @@ public class FindRepository<T> implements IFindRepository<T> {
         this.tClass = tClass;
         this.dao = dao;
         this.dbName = dbName;
-        this.snapshotCollection = com.sooncode.project.core.repository.StoreNames.isDefaultMongoSnapshotCollection(snapshotCollection)
-                ? com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT : snapshotCollection;
+        this.snapshotCollection = resolveSnapshotCollection(tClass, snapshotCollection);
+    }
+
+    /**
+     * 按实体 {@code @ModelSnapshot} 解析快照集合（对标 PG 的表名解析与 EventStore 的集合名）。
+     * 显式传入非默认集合名时优先使用显式值；传入默认/空时回退到注解，无注解再回退默认集合。
+     */
+    static String snapshotCollectionFor(Class<?> entityClass) {
+        if (entityClass != null) {
+            com.sooncode.project.core.annotations.ModelSnapshot ann =
+                    entityClass.getAnnotation(com.sooncode.project.core.annotations.ModelSnapshot.class);
+            if (ann != null) {
+                if (ann.value() != null && !ann.value().isEmpty()) {
+                    return ann.value();
+                }
+                if (ann.collectionName() != null && !ann.collectionName().isEmpty()) {
+                    return ann.collectionName();
+                }
+            }
+        }
+        return com.sooncode.project.core.repository.StoreNames.MONGO_EVENT_SNAPSHOT;
+    }
+
+    private static String resolveSnapshotCollection(Class<?> entityClass, String snapshotCollection) {
+        if (!com.sooncode.project.core.repository.StoreNames.isDefaultMongoSnapshotCollection(snapshotCollection)) {
+            return snapshotCollection;
+        }
+        return snapshotCollectionFor(entityClass);
     }
 
 

@@ -77,7 +77,7 @@ public class DomainSession implements ISession{
             String key = operationKey(entity);
             for (BatchOperation existing : batchOperations) {
                 if (existing.getEntity() != entity && key.equals(operationKey(existing.getEntity()))) {
-                    throw new DomainException("同一会话中实体 ID 不能重复:" + entity.getId());
+                    throw new DomainException("同一会话中实体 ID 不能重复（同一聚合根被加载了两次，请复用同一对象）:" + entity.getId());
                 }
             }
         }
@@ -88,6 +88,7 @@ public class DomainSession implements ISession{
         }
     }
 
+    // key 分隔符统一为 "-"（类全名 + "-" + id），与 streamNameFor 各实现保持一致，改动需全局同步。
     private static String operationKey(DomainModel entity) {
         if (entity == null) return "";
         return entity.getClass().getName() + "-" + entity.getId();
@@ -214,8 +215,10 @@ public class DomainSession implements ISession{
 
     /**
      * 为“只 session.add(e)、没走 repository.*”的 pending 实体补收集操作。
-     * 操作类型按待持久化事件的 {@code @EventBoot(StoreFunc)} 推断；事件语义混杂时直接抛错，
-     * 避免把 modify 误写成 add 等错误持久化。
+     * 操作类型按待持久化事件的 {@code @EventBoot(StoreFunc)} 以最终意图合并推断：
+     * DELETE 优先；ADD 之后出现 MODIFY 仍走新增（同一新建实体的创建+修改一次写入）；
+     * 忽略 replay/none；无有效语义则跳过。ADD 后 DELETE 等极端混杂按最终意图收敛，
+     * 调用方如需严格校验请显式走 repository.* 收集。
      */
     private void collectPendingEntitiesWithoutOperation() {
         if (entities == null || entities.isEmpty()) return;

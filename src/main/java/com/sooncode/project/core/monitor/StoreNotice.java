@@ -68,6 +68,7 @@ public class StoreNotice {
                 break;
             case replay:
                 repository.replay(entity.getId(),entity.getClass(),entity.getVersion());
+                break;
             case none:
                 return;
             default:

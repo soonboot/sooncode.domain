@@ -108,6 +108,16 @@ public class Trash {
         T entity = jsonObject.toJavaObject(tClass);
         if (entity instanceof DomainModel) {
             ((DomainModel) entity).markStored();
+            // 快照不持久化 version，反序列化后 version 恒为 0；以元数据版本为准回填，
+            // 否则后续 save/delete 的 CAS 基准错误，且与 DomainRepository.findByID 语义一致。
+            try {
+                com.sooncode.project.core.model.EventStream meta = eventStore.loadMetadata(streamName);
+                int baseVersion = meta != null ? meta.getVersion() : ((DomainModel) entity).getVersion();
+                ((DomainModel) entity).setVersion(baseVersion);
+                ((DomainModel) entity).startVersion = baseVersion;
+            } catch (Exception ignore) {
+                ((DomainModel) entity).startVersion = ((DomainModel) entity).getVersion();
+            }
         }
         return entity;
     }
@@ -201,6 +211,10 @@ public class Trash {
         return page;
     }
 
+    /**
+     * 流名分隔符统一为 {@code "-"}（类全名 + "-" + id），与 DomainRepository/Batcher/
+     * DomainSession/PgDocumentMapper/MongoLookupBulkWriter 保持一致，改动需全局同步。
+     */
     private String streamNameFor(Class c, String id) {
         return String.format("%s-%s", c.getName(), id);
     }

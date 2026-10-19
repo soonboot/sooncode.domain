@@ -99,7 +99,10 @@ public class EventWrapper {
                 setSourceModelDescription(description.get("sourceModelDescription").toString());
             }};
             setDescription(desc);
-        }catch (Exception ex){};
+        }catch (Exception ex){
+            // 创建人/描述为可选审计信息，缺失时容忍为空；保留注释便于排查，避免静默吞异常的误解。
+            // 如需排查可在此打日志：System.err.println("EventWrapper audit info missing: " + ex);
+        };
     }
     /**
      * 构造器

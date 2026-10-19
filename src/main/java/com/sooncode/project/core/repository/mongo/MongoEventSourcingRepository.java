@@ -65,6 +65,10 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
         dao.update(col, bson, map);
     }
 
+    /**
+     * CAS 更新元数据。expectedVersion 为 null 时退化为普通更新（仅校验未失效），
+     * 调用方需自行保证已做并发检查；非 null 时按版本精确过滤，失配抛 CheckForConcurrencyException。
+     */
     @Override
     public boolean updateMetadataCAS(EventStream stream, Integer expectedVersion) {
         MongoCollection<Document> col = dao.getCollection(dbName, MongoDocumentMapper.EVENT_METADATA);
@@ -107,7 +111,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
                 return MongoDocumentMapper.toEventStream(doc);
             } catch (Exception ex) {
                 ex.printStackTrace();
-                return null;
+                throw new DomainException("事件流反序列化失败:" + streamName, ex);
             }
         }
         return null;
@@ -144,7 +148,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
                 events.add(event);
             } catch (Exception ex) {
                 ex.printStackTrace();
-                return null;
+                throw new DomainException("事件流反序列化失败:" + streamName, ex);
             }
 
         }
@@ -187,7 +191,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
                 list.add(event);
             } catch (Exception ex) {
                 ex.printStackTrace();
-                return null;
+                throw new DomainException("事件流反序列化失败:" + modelType + "/" + eventType, ex);
             }
         }
         long total = dao.count(col, bson);
@@ -258,7 +262,7 @@ public class MongoEventSourcingRepository implements IEventSourcingRepository {
                 snapshotList.add(snapshot);
             } catch (Exception ex) {
                 ex.printStackTrace();
-                return null;
+                throw new DomainException("快照反序列化失败:" + streamType, ex);
             }
         }
         return snapshotList;

@@ -32,7 +32,7 @@ public class FindHelper{
             list = new ArrayList<>();
             this.andMap.put(key,list);
         }
-        if(value.equals("false")||value.equals("true")){
+        if("false".equals(value)||"true".equals(value)){
             value= Boolean.parseBoolean((String) value);
         }
         else if(type==null&&value!=null&&value instanceof String){
@@ -59,7 +59,7 @@ public class FindHelper{
             list = new ArrayList<>();
             this.orMap.put(key,list);
         }
-        if(value.equals("false")||value.equals("true")){
+        if("false".equals(value)||"true".equals(value)){
             value= Boolean.parseBoolean((String) value);
         }
         else if(type==null&&value!=null&&value instanceof String){

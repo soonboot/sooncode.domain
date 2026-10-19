@@ -88,17 +88,62 @@ public class PgFindRepository<T extends DomainModel<T>> implements IFindReposito
                 PgFindBuild.orderBy(sort, "create_date", true) + " LIMIT ? OFFSET ?");
         bound.params.add(pageSize);
         bound.params.add((long) pageIndex * pageSize);
-        List<T> list = new ArrayList<>();
-        for (Map<String, Object> row : dao.queryList(bound.sql, bound.params)) {
-            list.add(deserialize(row));
+        Bound totalBound = select(findHelper, "COUNT(*) AS c", "");
+        // PG 原生优化：同一连接内跑数据+总数，省一次建连/往返；SQL 语义与原来两次查询一致。
+        try (java.sql.Connection c = dao.connection()) {
+            List<T> list = new ArrayList<>();
+            for (Map<String, Object> row : dao.queryList(c, bound.sql, bound.params)) {
+                list.add(deserialize(row));
+            }
+            long total = dao.queryLong(c, totalBound.sql, totalBound.params);
+            Page<T> page = new Page<>();
+            page.setPageSize(pageSize);
+            page.setPageIndex(pageIndex);
+            page.setTotalElements(total);
+            page.setContent(list);
+            return page;
+        } catch (java.sql.SQLException e) {
+            throw new DomainException("PGSQL 分页查询失败: " + e.getMessage(), e);
         }
-        long total = count(findHelper);
-        Page<T> page = new Page<>();
-        page.setPageSize(pageSize);
-        page.setPageIndex(pageIndex);
-        page.setTotalElements(total);
-        page.setContent(list);
-        return page;
+    }
+
+    /**
+     * PG 原生键集翻页（新增 API，原 page() 保持 OFFSET 语义不变）。
+     *
+     * <p>深翻页时 {@code OFFSET} 要扫描并丢弃前 N 行，键集用
+     * {@code WHERE (create_date, stream_id) < (?,?) ORDER BY ... LIMIT ?} 直接定位，
+     * 复杂度从 {@code O(N)} 降到 {@code O(logN)}。调用方首次传 {@code null} 游标，
+     * 后续用上一页最后一条的 {@code create_date/stream_id} 继续。
+     */
+    public Page<T> pageAfter(FindHelper findHelper, int pageSize,
+                             java.util.Date afterCreateDate, String afterStreamId, Sort sort) {
+        Bound base = select(findHelper, "stream_id, snapshot_type, snapshot, create_date", "");
+        StringBuilder sql = new StringBuilder(base.sql);
+        List<Object> params = new ArrayList<>(base.params);
+        if (afterCreateDate != null && afterStreamId != null) {
+            sql.append(" AND (create_date, stream_id) < (?, ?)");
+            params.add(PgDao.ts(afterCreateDate));
+            params.add(afterStreamId);
+        }
+        sql.append(PgFindBuild.orderBy(sort, "create_date", true));
+        sql.append(" LIMIT ?");
+        params.add(pageSize);
+        Bound totalBound = select(findHelper, "COUNT(*) AS c", "");
+        try (java.sql.Connection c = dao.connection()) {
+            List<T> list = new ArrayList<>();
+            for (Map<String, Object> row : dao.queryList(c, sql.toString(), params)) {
+                list.add(deserialize(row));
+            }
+            long total = dao.queryLong(c, totalBound.sql, totalBound.params);
+            Page<T> page = new Page<>();
+            page.setPageSize(pageSize);
+            page.setPageIndex(0);
+            page.setTotalElements(total);
+            page.setContent(list);
+            return page;
+        } catch (java.sql.SQLException e) {
+            throw new DomainException("PGSQL 键集分页查询失败: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -193,6 +238,14 @@ public class PgFindRepository<T extends DomainModel<T>> implements IFindReposito
         if (!filter.sql.isEmpty()) {
             sql.append(" AND ").append(filter.sql);
             params.addAll(filter.params);
+        }
+        // PG 原生加速：等值字符串条件追加 snapshot @> ?::jsonb，走 GIN 倒排；
+        // 无等值条件时 gin.sql 为空，SQL 与原来逐字一致。
+        PgFindBuild.SqlFilter gin = PgFindBuild.ginFilters(tClass,
+                findHelper == null ? new FindHelper(true) : findHelper);
+        if (!gin.sql.isEmpty()) {
+            sql.append(" AND ").append(gin.sql);
+            params.addAll(gin.params);
         }
         sql.append(tail);
         return new Bound(sql.toString(), params);
