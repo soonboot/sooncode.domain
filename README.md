@@ -5,7 +5,7 @@
 [![Maven](https://img.shields.io/badge/Maven-3.6+-red.svg)](https://maven.apache.org)
 [![MongoDB](https://img.shields.io/badge/MongoDB-4.4+-green.svg)](https://mongodb.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12+-blue.svg)](https://postgresql.org)
-[![version](https://img.shields.io/badge/version-1.9.1-blue)](https://github.com/soonboot/sooncode.domain)
+[![version](https://img.shields.io/badge/version-1.9.2-blue)](https://github.com/soonboot/sooncode.domain)
 [![JitPack](https://jitpack.io/v/soonboot/sooncode.domain.svg)](https://jitpack.io/#soonboot/sooncode.domain)
 
 > **A Java DDD + Event Sourcing framework backed by MongoDB or PostgreSQL.**
@@ -70,7 +70,7 @@ Add to your `pom.xml`（添加到你的 `pom.xml`）:
 <dependency>
     <groupId>com.github.soonboot</groupId>
     <artifactId>sooncode.domain</artifactId>
-    <version>v1.9.1</version>
+    <version>v1.9.2</version>
 </dependency>
 ```
 
@@ -81,7 +81,7 @@ repositories {
     maven { url 'https://jitpack.io' }
 }
 dependencies {
-    implementation 'com.github.soonboot:sooncode.domain:v1.9.1'
+    implementation 'com.github.soonboot:sooncode.domain:v1.9.2'
 }
 ```
 

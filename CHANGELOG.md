@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-10-20
+
+### Fixed
+
+- `Find.byModel` 模板查询恒零命中：按 `@IgnoreField`（字段或 getter/setter 注解）+ `id` 过滤查询条件，与 `EntityConvert` 序列化规则同源；此前 `stored/events/version/pendingEvents` 不落快照且模板 `id` 恒非空（构造器随机 UUID），导致条件恒不成立。Journey 用例 `byModel` 由 0 条翻案为 2 条。
+- 删除零断言、连 `localhost:27017` 空转的 `FinderTest`；Journey 补强（`replay` 补 `price/stock`、`batcher_addAllContinue` 补 `totalCount/successCount`、PG 侧补 `lastParams` 值与顺序/`lastSort` 透传、Mongo 侧 BSON 含值断言）；新增 `LookupHandlerTest`（14 例）与 fail-fast 夹具包。
+
+### Changed
+
+- 构建：移除 `pom` 中 `<skipTests>true</skipTests>`（surefire 按属性名读取会导致 `mvn test` 直接跳过，快速打包改用 `-DskipTests`）；显式声明 `maven-surefire-plugin 3.2.5`（wrapper 锁定 Maven 3.6.3 默认绑定 surefire 2.12.4 不认 JUnit 5）；真库用例凭据改为只读环境变量（`SOONCODE_MONGO_URI` / `SOONCODE_PG_*`，未配置用 `Assumptions` 跳过）；接入 JaCoCo 报告（只出数据不设门禁）。
+- CI：新增 `.github/workflows/ci.yml`（test job 跑全量并上传覆盖率；wrapper job 校验 surefire XML 的 `tests` 总数非 0，守住静默通过）。无环境变量 `mvn test` 132 通过（真库 36 例跳过），配环境变量 168 通过。
+
 ## [1.9.1] - 2026-10-19
 
 ### Added
@@ -86,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report generation from snapshots (`GenerateReport`, `RebuildReport`)
 - Java 8+ compatible
 
+[1.9.2]: https://github.com/soonboot/sooncode.domain/releases
 [1.9.1]: https://github.com/soonboot/sooncode.domain/releases
 [1.9.0]: https://github.com/soonboot/sooncode.domain/releases
 [1.7.2]: https://github.com/soonboot/sooncode.domain/releases
