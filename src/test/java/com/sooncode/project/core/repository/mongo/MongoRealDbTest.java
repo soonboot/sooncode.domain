@@ -20,6 +20,7 @@ import com.sooncode.project.core.session.SessionManager;
 import com.sooncode.project.core.trash.Trash;
 import com.sooncode.project.core.utils.EntityConvert;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,20 +36,31 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 用户视角的 Mongo 真实库测试（直连服务器 192.168.0.22:7100）。
+ * 用户视角的 Mongo 真实库测试（连接串由环境变量 {@code SOONCODE_MONGO_URI} 提供，未配置则整类跳过）。
  *
  * <p>与 {@code MongoUserJourneyTest} 同构，但全部打到真实 Mongo：
  * 增删改查、并发 CAS、快照丢失重放、Finder 全写法、Batcher、DomainSession、Trash、Monitor 监听。
  *
  * <p>隔离策略：专用库 {@code realtest} + 每个测试方法独立 tag（查改删的 id 与 Finder 的
  * category 均带 tag），断言只看 tag 内数据；跨轮残留不影响结果。
- * 运行要求：Mongo 可达，否则测试直接失败（不静默跳过）。
+ * 运行要求：Mongo 可达；未配置连接串时整类跳过（不静默失败）。
+ * <p>连接串只从环境变量读取，源码中不出现任何地址与口令：
+ * <pre>
+ *   SOONCODE_MONGO_URI='mongodb://user:pass@host:port/realtest?authSource=admin' \
+ *     mvn test -Dtest=MongoRealDbTest
+ * </pre>
+ * 也兼容等价的 -Ddomain.mongo.uri 系统属性。
  */
 class MongoRealDbTest {
 
-    static final String MONGO_URI =
-            System.getProperty("domain.mongo.uri",
-                    "mongodb://admin:zjgqwinds7272@192.168.0.22:7100/realtest?authSource=admin");
+    static final String MONGO_URI = setting("SOONCODE_MONGO_URI", "domain.mongo.uri");
+
+    /** 环境变量优先，其次系统属性；未配置返回 null 表示跳过真实库测试。 */
+    private static String setting(String envKey, String propKey) {
+        String v = System.getenv(envKey);
+        if (v == null || v.isBlank()) v = System.getProperty(propKey);
+        return (v == null || v.isBlank()) ? null : v;
+    }
 
     // ---------------- 用户实体 ----------------
 
@@ -107,6 +119,8 @@ class MongoRealDbTest {
 
     @BeforeAll
     static void connectOnce() {
+        Assumptions.assumeTrue(MONGO_URI != null,
+                "未配置 SOONCODE_MONGO_URI（或 -Ddomain.mongo.uri），跳过 Mongo 真实库测试");
         connection = new MongoConnection(MONGO_URI);
         eventStore = new EventStore(connection.getRepository());
     }

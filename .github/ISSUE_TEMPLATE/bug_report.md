@@ -24,9 +24,10 @@ What you expected to happen.
 What actually happened (error message, stack trace, wrong result).
 
 **Environment:**
-- Java version: [e.g. 11, 17]
-- Framework version: [e.g. 1.7.2-SNAPSHOT]
-- MongoDB version: [e.g. 5.0, 6.0]
+- Java version: [e.g. 21]
+- Framework version: [e.g. 1.9.1]
+- Storage backend: [MongoDB 4.4+ / PostgreSQL 12+]
+- Database version: [e.g. MongoDB 6.0, PostgreSQL 16]
 - OS: [e.g. macOS, Linux]
 
 **Additional context**

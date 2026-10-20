@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test (mvn)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # pom 不再默认 skipTests，这条命令就是真正的测试执行。
+      # 真实库用例（MongoRealDbTest / PgRealDbTest）在未配置 SOONCODE_* 环境变量时
+      # 通过 JUnit Assumptions 自动跳过，因此 CI 无需数据库也能绿。
+      - name: Run tests
+        run: mvn -B -ntp test
+
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          if-no-files-found: ignore
+
+      - name: Upload surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+
+  wrapper:
+    name: Test (./mvnw)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # wrapper 锁定 Maven 3.6.3，其默认 surefire 2.12.4 不认识 JUnit 5，
+      # 曾经表现为 "Tests run: 0 + BUILD SUCCESS"（静默黑洞）。
+      # pom 里已显式声明 surefire 3.x；本 job 守住这个回归。
+      - name: Run tests via wrapper
+        run: ./mvnw -B -ntp test
+
+      - name: Fail if no tests were executed
+        run: |
+          total=$(grep -ho 'tests="[0-9]*"' target/surefire-reports/*.xml \
+                  | sed 's/[^0-9]//g' | awk '{s+=$1} END {print s+0}')
+          echo "executed tests: $total"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::测试数量为 0 —— surefire 可能又退回到不认识 JUnit 5 的版本"
+            exit 1
+          fi

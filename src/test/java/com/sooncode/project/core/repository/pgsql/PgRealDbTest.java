@@ -20,6 +20,7 @@ import com.sooncode.project.core.session.SessionManager;
 import com.sooncode.project.core.trash.Trash;
 import com.sooncode.project.core.utils.EntityConvert;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,25 +36,36 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 用户视角的 PG 真实库测试（直连服务器 192.168.0.22:5432）。
+ * 用户视角的 PG 真实库测试（连接参数由环境变量 {@code SOONCODE_PG_*} 提供，未配置则整类跳过）。
  *
  * <p>与 {@code PgUserJourneyTest} 同构，但全部打到真实 PostgreSQL：
  * 增删改查、并发 CAS、快照丢失重放、Finder 全写法、Batcher、DomainSession、Trash、Monitor 监听。
  *
  * <p>隔离策略：专用库 {@code realtest}（不存在自动建库，需用户具备 CREATEDB 权限） + 每个测试方法独立 tag（查改删的 id 与 Finder 的
  * category 均带 tag），断言只看 tag 内数据；跨轮残留不影响结果。
- * 运行要求：PG 可达，否则测试直接失败（不静默跳过）。
- * 凭证默认 host=192.168.0.22/port=5432/db=realtest/user=postgres/pass=postgres，
- * 可经 -Ddomain.pg.host/port/db/user/pass 覆盖。
+ * 运行要求：PG 可达；未配置连接地址时整类跳过（不静默失败）。
+ * <p>凭证只从环境变量读取，源码中不出现任何地址与口令：
+ * <pre>
+ *   SOONCODE_PG_HOST=127.0.0.1 SOONCODE_PG_PASSWORD=*** mvn test -Dtest=PgRealDbTest
+ * </pre>
+ * 可选：SOONCODE_PG_PORT(5432) / SOONCODE_PG_DB(realtest) / SOONCODE_PG_USER(postgres)。
+ * 也兼容等价的 -Ddomain.pg.host 等系统属性。
  */
 class PgRealDbTest {
 
-    static final String PG_HOST = System.getProperty("domain.pg.host", "192.168.0.22");
+    static final String PG_HOST = setting("SOONCODE_PG_HOST", "domain.pg.host", null);
     static final int PG_PORT =
-            Integer.parseInt(System.getProperty("domain.pg.port", "5432"));
-    static final String PG_DB = System.getProperty("domain.pg.db", "realtest");
-    static final String PG_USER = System.getProperty("domain.pg.user", "postgres");
-    static final String PG_PASS = System.getProperty("domain.pg.pass", "server.123456");
+            Integer.parseInt(setting("SOONCODE_PG_PORT", "domain.pg.port", "5432"));
+    static final String PG_DB = setting("SOONCODE_PG_DB", "domain.pg.db", "realtest");
+    static final String PG_USER = setting("SOONCODE_PG_USER", "domain.pg.user", "postgres");
+    static final String PG_PASS = setting("SOONCODE_PG_PASSWORD", "domain.pg.pass", "");
+
+    /** 环境变量优先，其次系统属性，最后默认值；避免把真实地址与口令写进源码。 */
+    private static String setting(String envKey, String propKey, String def) {
+        String v = System.getenv(envKey);
+        if (v == null || v.isBlank()) v = System.getProperty(propKey);
+        return (v == null || v.isBlank()) ? def : v;
+    }
 
     // ---------------- 用户实体 ----------------
 
@@ -112,6 +124,8 @@ class PgRealDbTest {
 
     @BeforeAll
     static void connectOnce() {
+        Assumptions.assumeTrue(PG_HOST != null,
+                "未配置 SOONCODE_PG_HOST（或 -Ddomain.pg.host），跳过 PG 真实库测试");
         connection = new PgConnection(PG_HOST, PG_PORT, PG_DB, PG_USER, PG_PASS);
         eventStore = new EventStore(connection.getRepository());
     }

@@ -1,19 +1,22 @@
 # sooncode.domain
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Java](https://img.shields.io/badge/Java-8+-orange.svg)](https://java.com)
+[![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://java.com)
 [![Maven](https://img.shields.io/badge/Maven-3.6+-red.svg)](https://maven.apache.org)
 [![MongoDB](https://img.shields.io/badge/MongoDB-4.4+-green.svg)](https://mongodb.com)
-[![version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/soonboot/sooncode.domain)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12+-blue.svg)](https://postgresql.org)
+[![version](https://img.shields.io/badge/version-1.9.1-blue)](https://github.com/soonboot/sooncode.domain)
 [![JitPack](https://jitpack.io/v/soonboot/sooncode.domain.svg)](https://jitpack.io/#soonboot/sooncode.domain)
 
-> **A Java DDD + Event Sourcing framework backed by MongoDB.**
+> **A Java DDD + Event Sourcing framework backed by MongoDB or PostgreSQL.**
 >
-> **一个基于 MongoDB 的 Java 领域驱动设计 + 事件溯源框架。**
+> **一个基于 MongoDB / PostgreSQL 的 Java 领域驱动设计 + 事件溯源框架。**
 
 Built for developers who want **clean domain models, immutable event histories, and powerful query capabilities** — without the complexity of large event sourcing platforms. Designed with **AI vibe coding** in mind: intuitive APIs, minimal boilerplate, and strong conventions that LLMs can easily generate.
 
 致力于让开发者拥有 **清晰的领域模型、不可变的事件历史、强大的查询能力**，且没有大型事件溯源平台的臃肿。专为 **AI 友好编码** 设计：API 直观、模板代码少、约定明确，LLM 能轻松理解和生成。
+
+**存储后端 / Storage backends:** MongoDB（原生同步驱动）与 PostgreSQL（行 + JSONB 文档形态）双实现，`Monitor` / `Finder` 链路零改动复用。
 
 ---
 
@@ -37,10 +40,14 @@ Built for developers who want **clean domain models, immutable event histories, 
   声明式校验
 - **📊 Report Generation / 报表生成** — Snapshot-based report regeneration
   基于快照的报表重建
+- **🗑️ Recycle Bin / 回收站** — `Trash` 保留删除时的快照，支持分页浏览与按 ID 还原
+  `listTrash` / `countTrash` / `restore`
 - **🏗️ MongoDB Native / 原生 MongoDB** — Direct MongoDB sync driver, no ORM overhead
   直接使用 MongoDB 同步驱动，无 ORM 开销
-- **🧩 Minimal Dependencies / 最小依赖** — Just `mongodb-driver-sync`, `fastjson`, and `commons-lang3`
-  仅三个核心依赖
+- **🐘 PostgreSQL as Document Store / PG 文档库** — 行 + JSONB 镜像实现（四表自举、免建库免建表），GIN 索引加速与键集翻页
+  `PgConnection` / `PgFactory` 成套接入，`Monitor` / `Finder` 零改动
+- **🧩 Minimal Dependencies / 最小依赖** — `mongodb-driver-sync`、PostgreSQL JDBC + HikariCP、`fastjson`、`commons-lang3`、slf4j/logback
+  核心依赖保持精简
 
 ---
 
@@ -63,7 +70,7 @@ Add to your `pom.xml`（添加到你的 `pom.xml`）:
 <dependency>
     <groupId>com.github.soonboot</groupId>
     <artifactId>sooncode.domain</artifactId>
-    <version>v1.7.2</version>
+    <version>v1.9.1</version>
 </dependency>
 ```
 
@@ -74,7 +81,7 @@ repositories {
     maven { url 'https://jitpack.io' }
 }
 dependencies {
-    implementation 'com.github.soonboot:sooncode.domain:v1.7.2'
+    implementation 'com.github.soonboot:sooncode.domain:v1.9.1'
 }
 ```
 
@@ -90,13 +97,25 @@ First, set up MongoDB connection and init the Monitor (one-time bootstrap):
 // Init Monitor singleton / 初始化 Monitor
 Monitor monitor = Monitor.New();
 
-// Connect to MongoDB — internally creates EventStore + DomainRepository
-MongoConnection connection = new MongoConnection("localhost", 27017, "myDatabase");
+// MongoDB — 免密本机（username/password 传 null）；internally creates EventStore + DomainRepository
+MongoConnection connection =
+    new MongoConnection("localhost", 27017, "myDatabase", null, null);
 monitor.ConfigDBConnection(connection);
+
+// 或者用连接串 / or a full connection string（含凭据、副本集、读写关注等）
+monitor.ConfigDBConnection(
+    new MongoConnection("mongodb://user:pwd@host:27017/myDatabase"));
 ```
 
-**说明：** `ConfigDBConnection` 内部自动创建了 `EventStore`、`DomainRepository`，之后通过 `monitor.getDomainRepository()` 即可获取。
-**Note:** `ConfigDBConnection` internally creates `EventStore` and `DomainRepository`. Use `monitor.getDomainRepository()` to access it later.
+选 PostgreSQL 时只需换成 `PgConnection`（详见 [PostgreSQL 章节](#-postgresql-jsonb-文档形态--postgresql-as-document-store)）：
+
+```java
+Monitor monitor = Monitor.New();
+monitor.ConfigDBConnection(new PgConnection("localhost", 5432, "mydb", "postgres", "secret"));
+```
+
+**说明：** `ConfigDBConnection` 内部自动创建了 `EventStore`、`DomainRepository` 与批量/查询/回收站仓储，之后通过 `monitor.getDomainRepository()` 即可获取。
+**Note:** `ConfigDBConnection` internally creates `EventStore`, `DomainRepository` and the batch/query/trash repositories. Use `monitor.getDomainRepository()` to access it later.
 
 ---
 
@@ -201,8 +220,14 @@ loaded.changeEmail("alice@newdomain.com");
 loaded.delete();          // registers BasicDeleteEvent
 
 // --- Replay (事件重放) ---
-User rebuilt = loaded.replay(user.getId(), User.class, 5);
+DomainRepository<User> repository =
+    (DomainRepository<User>) monitor.getDomainRepository();
+User rebuilt = repository.replay(user.getId(), User.class, 5);
 // → Rebuilds entity by replaying events 0..5 from the event stream
+
+// 实体内重放（按自身事件流）/ replay on the entity itself
+loaded.replay(5);      // 0..5
+loaded.replay(2, 5);   // 2..5
 ```
 
 **Repository methods / 仓库方法一览：**
@@ -314,9 +339,11 @@ Built-in generic events / 内置通用事件: `BasicAddEvent`, `BasicModifyEvent
 | `findByID(id, class)` | Load latest snapshot / 加载最新快照 |
 | `add(entity)` | Create new event stream + snapshot / 创建事件流+快照 |
 | `save(entity)` | Append events + update snapshot (with concurrency check) / 追加事件+更新快照(并发校验) |
-| `delete(entity)` | Mark stream as invalid + remove snapshot / 标记流失效+删除快照 |
+| `delete(entity)` | Mark stream as invalid + remove snapshot (kept in Trash) / 标记流失效+删除快照（副本入回收站） |
 | `replay(id, class, toVersion)` | Rebuild entity from event history / 重建实体 |
 | `getEventStream(...)` | Query event history with filters / 查询事件历史 |
+| `saveSnapshot(entity)` / `deleteSnapshot(entity)` | Directly write or remove the snapshot / 直接写入或删除快照 |
+| `getSnapshotList(class)` | Load all snapshots of one type / 读取某类型全部快照 |
 
 ### Event Store & Snapshots / 事件存储与快照
 
@@ -437,6 +464,32 @@ BatchOptions options = BatchOptions.defaults()
 
 使用 `atomic=false` 时，单个实体内部的多步写入不保证回滚。
 
+### Recycle Bin / 回收站
+
+`delete()` 成功后，被删除的快照会保留一份到回收站（Mongo 集合 `snapshotTrash` / PG 表 `snapshot_trash`），
+可分页浏览、统计，或按 ID 还原（重新激活事件流 + 回写快照 + 以元数据版本回填 `version`）。
+
+```java
+// 删除即入站（无需额外调用）/ deleted snapshots are kept automatically
+loaded.delete();
+
+// 回收站门面：构造即自动匹配当前库（InfraContext 工厂产出），未配置时回退 Mongo 默认连接
+Trash trash = new Trash(eventStore);          // eventStore 由框架持有
+Page<TrashRecord> bin   = trash.listTrash(User.class, 0, 20);   // 页号从 0 开始
+long deletedCount       = trash.countTrash(User.class);
+Page<TrashRecord> all   = trash.listAllTrash(0, 20);
+User back               = trash.restore(userId, User.class);   // 还原实体
+boolean on              = trash.isEnabled();                   // 当前库是否支持回收站
+```
+
+| Method / 方法 | Description / 说明 |
+|---|---|
+| `listTrash(class, pageIndex, pageSize)` | 按实体类型分页浏览回收站 / paged trash of one type |
+| `countTrash(class)` / `countAllTrash()` | 回收站计数 / count by type or overall |
+| `listAllTrash(pageIndex, pageSize)` | 跨类型分页浏览 / paged trash across types |
+| `restore(id, class)` | 还原实体（重激活事件流 + 回写快照）/ restore entity |
+| `isEnabled()` | 当前库是否装配了回收站实现 / whether trash storage is configured |
+
 The default batch configuration uses non-transactional execution because the
 default `failureMode` is `CONTINUE`. Transactions cover event metadata, event
 records, snapshots, and Trash records, and require MongoDB replica-set
@@ -467,7 +520,7 @@ This framework is designed to be **AI vibe coding friendly** — LLMs can easily
 2. **Self-documenting APIs / 自文档化 API** — Method names express intent: `causes(event)`, `add()`, `save()`, `byField().list()`
 3. **Minimal boilerplate / 最少模板代码** — Base classes handle serialization, event routing, and persistence / 基类处理序列化、事件路由和持久化
 4. **Predictable patterns / 可预测的模式** — `when(ConcreteEvent)` handlers mirror the Axon/CQRS pattern
-5. **Clear dependencies / 清晰的依赖** — Pure Java with three small dependencies / 纯 Java，只有三个轻量依赖
+5. **Clear dependencies / 清晰的依赖** — Pure Java with a handful of small libraries / 纯 Java，只有少量轻量依赖
 6. **Consistent error handling / 一致的错误处理** — `DomainException` hierarchy with levels for operational context
 
 **Prompt tip for AI coding assistants / 给 AI 编程助手的提示词:**
@@ -482,6 +535,7 @@ This framework is designed to be **AI vibe coding friendly** — LLMs can easily
 | `eventMetadata` | Event stream metadata (version, invalidation) / 事件流元数据 |
 | `eventSource` | Append-only event records / 追加写的事件记录 |
 | `eventSnapshot` | Latest snapshot of each aggregate (or custom via `@ModelSnapshot`) / 聚合根最新快照 |
+| `snapshotTrash` | Deleted snapshots kept by the recycle bin / 回收站保留的已删除快照 |
 
 ### PostgreSQL (JSONB 文档形态) / PostgreSQL as Document Store
 
@@ -517,6 +571,16 @@ host-port-database 时退化为直连原库），核心四表与按需快照表�
 `snapshot->>'字段'` / 嵌套 `snapshot#>>'{a,b}'` 翻译，数值比较带防爆守卫；
 批量语义与 Mongo 一致（`atomic=true` 单事务回滚，`false` 逐条提交）。
 
+**PG 原生加速（v1.9.1）/ PostgreSQL-specific speedups:**
+
+| 能力 | 说明 |
+|---|---|
+| `PgFindBuild.ginFilters` | 字符串等值 / **单值** `in` 额外生成 `snapshot @> ?::jsonb`，走 `USING GIN (snapshot jsonb_path_ops)`；与原有 `->>` 条件 AND 叠加，语义不变。多值 IN 不走包含判断（恒空，已回归覆盖） |
+| `PgFindRepository.page()` | 数据查询与 `COUNT` 在同一连接内完成，省一次建连与网络往返 |
+| `PgFindRepository.pageAfter(...)` | 键集（游标）翻页：`(create_date, stream_id) < (?, ?)`，深翻页 O(logN)；原 `page()` 的 OFFSET 语义保持不变 |
+| `PgDao.mergeSnapshotPatch` | `\|\|` 合并快照补丁 + `IS DISTINCT FROM` 守卫，避免无变化写入 |
+| 索引名工具 | 超 PG 63 字符标识符上限时截断并缀表名哈希，避免建索引失败/碰撞 |
+
 ---
 
 ## 🔧 Build / 构建
@@ -525,20 +589,35 @@ host-port-database 时退化为直连原库），核心四表与按需快照表�
 # Clone / 克隆
 git clone https://github.com/soonboot/sooncode.domain.git
 
-# Build (skip tests) / 构建（跳过测试）
-mvn clean package -DskipTests
+# Build / 构建（默认会执行单元测试）
+mvn clean package
 
-# Run tests (requires MongoDB) / 运行测试（需要 MongoDB）
-mvn test
+# Fast build without tests / 跳过测试的快速打包
+mvn package -DskipTests
 
 # Install to local Maven repo / 安装到本地仓库
-mvn clean install -DskipTests
+mvn clean install
+
+# Run tests / 运行测试（纯单元测试，无需数据库）
+mvn test
+
+# With real databases / 连真实库运行全部用例（未配置环境变量时这些用例自动跳过）
+SOONCODE_MONGO_URI='mongodb://user:pass@host:7100/realtest?authSource=admin' \
+SOONCODE_PG_HOST=127.0.0.1 SOONCODE_PG_PASSWORD='***' \
+mvn test
 ```
 
 **Requirements / 环境要求:**
-- Java 8+
+- Java 21+（编译目标 `release 21`；Java 8 已不再支持）
 - Maven 3.6+
-- MongoDB 4.4+ (for tests and runtime / 测试和运行时需要)
+- MongoDB 4.4+（用 Mongo 后端时；事务型批量需副本集或 Atlas）
+- PostgreSQL 12+（用 PG 后端时；需 `CREATEDB` 权限才能自动建库，否则手动建库）
+
+**测试说明 / Tests:** `mvn test` 默认执行全部纯单元测试，无需任何数据库。
+`MongoRealDbTest` / `PgRealDbTest` 从环境变量读取连接串（`SOONCODE_MONGO_URI`、
+`SOONCODE_PG_HOST` / `SOONCODE_PG_PORT` / `SOONCODE_PG_DB` / `SOONCODE_PG_USER` /
+`SOONCODE_PG_PASSWORD`），未配置时通过 JUnit Assumptions 自动跳过，源码中不含任何地址与口令。
+覆盖率报告由 JaCoCo 生成在 `target/site/jacoco/index.html`。
 
 ---
 
@@ -547,38 +626,42 @@ mvn clean install -DskipTests
 | Library / 依赖库 | Version / 版本 | Purpose / 用途 |
 |---|---|---|
 | `mongodb-driver-sync` | 4.6.1 | MongoDB native driver / MongoDB 原生驱动 |
-| `fastjson` | 1.2.76 | JSON serialization / JSON 序列化 |
-| `commons-lang3` | 3.8.1 | String utilities, reflection / 字符串工具、反射 |
+| `postgresql` (JDBC) | 42.7.4 | PostgreSQL driver / PostgreSQL 驱动 |
+| `HikariCP` | 5.1.0 | Connection pool for PG / PG 连接池 |
+| `fastjson` | 1.2.83 | JSON serialization / JSON 序列化 |
+| `commons-lang3` | 3.18.0 | String utilities, reflection / 字符串工具、反射 |
+| `slf4j-api` | 1.7.36 | Logging facade / 日志门面 |
+| `logback-classic` | 1.2.11 | Default logging backend / 默认日志实现 |
 | `junit-jupiter` | 5.8.2 (test) | Unit testing / 单元测试 |
+
+> 只使用 MongoDB 时不会加载 PG 相关类；只想用 PG 时同样无需部署 MongoDB。
+> Using MongoDB only never touches the PG classes, and vice versa.
 
 ---
 
 ## 📐 Architecture Overview / 架构概览
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Your Domain Models                    │
-│              (extends DomainModel<T>)                    │
-├─────────────────────────────────────────────────────────┤
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐             │
-│  │ DomainEvnt│  │ Finder  │  │ IValidate  │             │
-│  └────┬─────┘  └────┬─────┘  └─────┬──────┘             │
-│       │              │              │                    │
-├───────┴──────────────┴──────────────┴────────────────────┤
-│                    Framework Core                        │
-│  ┌──────────────┐  ┌────────────┐  ┌──────────────┐     │
-│  │DomainRepositry│  │ EventStore  │  │  Monitor     │     │
-│  │  (IEventStore) │  │(IEventSrcRep)│  │(Pub/Sub)    │     │
-│  └──────┬───────┘  └─────┬──────┘  └──────┬───────┘     │
-│         │                │                 │             │
-├─────────┴────────────────┴─────────────────┴────────────┤
-│                 MongoDB Persistence                      │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐             │
-│  │MongoDBImpl│  │MongoEvSrc│  │FindRepositry│            │
-│  │ (CRUD)   │  │(Events)  │  │(Queries)  │             │
-│  └──────────┘  └──────────┘  └────────────┘             │
-└─────────────────────────────────────────────────────────┘
+Your Domain Models  (extends DomainModel<T>)
+   ├─ DomainEvent + @EventBoot    不可变事件 / immutable facts
+   ├─ Finder<T>                   流式查询 / fluent query
+   ├─ IValidate                   声明式校验 / declarative validation
+   └─ @Lookup / @ModelSnapshot    反规范化与快照表名 / denormalize & snapshot table
+
+Framework Core
+   ├─ DomainRepository ─── EventStore（事件流 + 快照 + CAS 版本）
+   ├─ Monitor                     事件/实体监听、事务与 Lookup 参数
+   └─ Batcher · DomainSession · Trash（工作单元与回收站）
+
+SPI — InfraFactory + InfraContext（选择并装配存储后端）
+   ├─ MongoFactory ── MongoDao ── eventMetadata / eventSource /
+   │                              eventSnapshot / snapshotTrash
+   └─ PgFactory    ── PgDao    ── event_metadata / event_source /
+                                  event_snapshot / snapshot_trash
 ```
+
+两套后端行为镜像：`Monitor` / `Finder` / `Batcher` / `DomainSession` / `Trash` 均零改动复用，
+切换后端只换 `ConfigDBConnection(...)` 传入的 `IDBConnection`。
 
 ---
 

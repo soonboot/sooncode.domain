@@ -86,4 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report generation from snapshots (`GenerateReport`, `RebuildReport`)
 - Java 8+ compatible
 
-[1.7.2]: https://github.com/soonboot/sooncode.domain
+[1.9.1]: https://github.com/soonboot/sooncode.domain/releases
+[1.9.0]: https://github.com/soonboot/sooncode.domain/releases
+[1.7.2]: https://github.com/soonboot/sooncode.domain/releases

@@ -634,6 +634,10 @@ class PgUserJourneyTest {
         Goods replayed = repo.replay("g6", Goods.class, 10);
         assertNotNull(replayed);
         assertEquals("苹果", replayed.getName());
+        // add 事件里就带着 name，只有 modify 事件才带新价格：
+        // 不校验 price 就无法证明"重放确实覆盖了 modify 事件"，漏掉 modify 也会绿。
+        assertEquals(20.0, replayed.getPrice(), 1e-9, "重放必须回放出 modify 事件后的价格");
+        assertEquals(100, replayed.getStock(), "重放必须保留 add 事件里的其他字段");
     }
 
     // ---------------- 2. Finder 查询 ----------------
@@ -646,6 +650,8 @@ class PgUserJourneyTest {
         List<Goods> list = finder().byField("category", "水果", OType.eq).list();
         assertEquals(2, list.size());
         assertTrue(memFind.lastSql.contains("=?"), memFind.lastSql);
+        // 只验 SQL 结构抓不到"操作符与参数错位"：参数必须逐个绑定正确
+        assertEquals(List.of("水果"), memFind.lastParams, "eq 的参数绑定");
     }
 
     @Test
@@ -668,6 +674,10 @@ class PgUserJourneyTest {
         assertTrue(memFind.lastSql.contains(">="), memFind.lastSql);
         assertTrue(memFind.lastOrderBy.contains("ORDER BY"), memFind.lastOrderBy);
         assertTrue(memFind.lastOrderBy.contains("DESC"), memFind.lastOrderBy);
+        // 两个区间参数必须按出现顺序绑定，且都被规约成 JSON 字面量文本
+        assertEquals(List.of("6.0", "20.0"), memFind.lastParams, "区间比较的参数顺序");
+        assertNotNull(memFind.lastSort, "排序必须透传到仓储");
+        assertEquals(Sort.Type.desc, memFind.lastSort.get().get("price"), "price 应按 DESC 排序");
     }
 
     @Test
@@ -678,9 +688,11 @@ class PgUserJourneyTest {
         List<Goods> orList = finder().orGroup(g -> g.or("category", "水果", OType.eq).or("name", "可乐", OType.eq)).list();
         assertEquals(2, orList.size());
         assertTrue(memFind.lastSql.contains(" OR "), memFind.lastSql);
+        assertEquals(List.of("水果", "可乐"), memFind.lastParams, "OR 组内的参数顺序");
 
         List<Goods> grouped = finder().andGroup(g -> g.and("category", "饮料", OType.eq)).list();
         assertEquals(2, grouped.size());
+        assertEquals(List.of("饮料"), memFind.lastParams, "AND 组的参数绑定");
     }
 
     @Test
@@ -691,15 +703,19 @@ class PgUserJourneyTest {
         map.put("category", "水果");
         assertEquals(2, finder().byMap(map).list().size());
 
-        // byModel 会把模板的全部非空属性（含 stored=true、events=[] 等基础设施属性）都作为条件，
-        // 而快照经 entityToMap 序列化时不含这些字段，因此新鲜模板查不到数据——
-        // 这与 Mongo 真实行为一致（snapshot.stored/snapshot.events 缺字段不匹配），此处锁定该语义。
+        // byModel 是 query-by-example：只有业务属性参与条件。
+        // 基础设施属性（stored/events/version/pendingEvents）根本不落快照，而 id 由 Entity 构造器
+        // 随机生成，若把它们带进条件就会"永远零命中"（历史缺陷，曾被错误地锁定为预期语义）。
         Goods template = new Goods();
         template.setCategory("水果");
         List<Goods> byModel = finder().byModel(template).list();
-        assertEquals(0, byModel.size());
-        assertTrue(memFind.lastSql.contains("stored") || memFind.lastSql.contains("events"),
-                memFind.lastSql);
+        assertEquals(2, byModel.size(), "模板查询应能命中，SQL=" + memFind.lastSql);
+        assertTrue(memFind.lastSql.contains("category"), memFind.lastSql);
+        assertFalse(memFind.lastSql.contains("stored"), memFind.lastSql);
+        assertFalse(memFind.lastSql.contains("events"), memFind.lastSql);
+        assertFalse(memFind.lastSql.contains("'id'"), memFind.lastSql);
+        // byModel 复用 byMap 的语义：String 默认按 contains（LIKE %v%）匹配，与 byField(String) 一致
+        assertEquals(List.of("%水果%"), memFind.lastParams, "模板查询只应绑定业务属性，且沿用模糊匹配语义");
     }
 
     @Test
@@ -754,8 +770,11 @@ class PgUserJourneyTest {
         List<Goods> in = finder().byField("category", Arrays.asList("水果"), OType.in).list();
         assertEquals(2, in.size());
         assertTrue(memFind.lastSql.contains("IN ("), memFind.lastSql);
+        assertEquals(List.of("水果"), memFind.lastParams, "IN 的参数绑定");
         List<Goods> nin = finder().byField("category", Arrays.asList("水果"), OType.nin).list();
         assertEquals(1, nin.size());
+        assertTrue(memFind.lastSql.contains("NOT IN"), memFind.lastSql);
+        assertEquals(List.of("水果"), memFind.lastParams, "NOT IN 的参数绑定");
     }
 
     // ---------------- 3. Batcher / Session / Monitor ----------------
@@ -768,8 +787,15 @@ class PgUserJourneyTest {
         Goods g2 = new Goods(); g2.setId("m2"); g2.create("香蕉", "水果", 5.0, 20);
         Monitor.New().ConfigDomainRepository(repo);
         BatchResult<Goods> r = new Batcher<>(Goods.class, repo).add(g1).add(g2).execute();
+        assertEquals(2, r.getTotalCount(), "两条操作都应进入批次");
+        assertEquals(2, r.getSuccessCount(), "CONTINUE 模式下两条都应成功");
         assertEquals(0, r.getFailureCount());
-        assertNotNull(repo.findByID("m1", Goods.class));
+        // 两个成员都要落库：只验 m1 会漏掉"批次丢掉最后一个操作"这类缺陷
+        assertNotNull(repo.findByID("m1", Goods.class), "第一个成员应已落库");
+        Goods m2 = repo.findByID("m2", Goods.class);
+        assertNotNull(m2, "第二个成员应已落库（不能只提交前 n-1 条）");
+        assertEquals("香蕉", m2.getName());
+        assertEquals(5.0, m2.getPrice(), 1e-9);
     }
 
     @Test

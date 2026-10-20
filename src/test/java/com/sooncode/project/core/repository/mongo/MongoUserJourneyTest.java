@@ -626,6 +626,10 @@ class MongoUserJourneyTest {
         Goods replayed = repo.replay("g6", Goods.class, 10);
         assertNotNull(replayed);
         assertEquals("苹果", replayed.getName());
+        // add 事件里就带着 name，只有 modify 事件才带新价格：
+        // 不校验 price 就无法证明"重放确实覆盖了 modify 事件"，漏掉 modify 也会绿。
+        assertEquals(20.0, replayed.getPrice(), 1e-9, "重放必须回放出 modify 事件后的价格");
+        assertEquals(100, replayed.getStock(), "重放必须保留 add 事件里的其他字段");
     }
 
     // ---------------- 2. Finder 查询 ----------------
@@ -638,6 +642,9 @@ class MongoUserJourneyTest {
         List<Goods> list = finder().byField("category", "水果", OType.eq).list();
         assertEquals(2, list.size());
         assertTrue(memFind.lastBson.contains("$eq"), memFind.lastBson);
+        // 只验操作符抓不到"字段与值错位"：BSON 里必须同时出现字段名和匹配值
+        assertTrue(memFind.lastBson.contains("snapshot.category"), memFind.lastBson);
+        assertTrue(memFind.lastBson.contains("水果"), memFind.lastBson);
     }
 
     @Test
@@ -681,15 +688,18 @@ class MongoUserJourneyTest {
         map.put("category", "水果");
         assertEquals(2, finder().byMap(map).list().size());
 
-        // byModel 会把模板的全部非空属性（含 stored=true、events=[] 等基础设施属性）都作为条件，
-        // 而快照经 entityToMap 序列化时不含这些字段，因此新鲜模板查不到数据——
-        // 这与 Mongo 真实行为一致（snapshot.stored/snapshot.events 缺字段不匹配），此处锁定该语义。
+        // byModel 是 query-by-example：只有业务属性参与条件。
+        // 基础设施属性（stored/events/version/pendingEvents）根本不落快照，而 id 由 Entity 构造器
+        // 随机生成，若把它们带进条件就会"永远零命中"（历史缺陷，曾被错误地锁定为预期语义）。
         Goods template = new Goods();
         template.setCategory("水果");
         List<Goods> byModel = finder().byModel(template).list();
-        assertEquals(0, byModel.size());
-        assertTrue(memFind.lastBson.contains("stored") || memFind.lastBson.contains("events"),
-                memFind.lastBson);
+        assertEquals(2, byModel.size(), "模板查询应能命中，BSON=" + memFind.lastBson);
+        assertTrue(memFind.lastBson.contains("category"), memFind.lastBson);
+        assertTrue(memFind.lastBson.contains("水果"), memFind.lastBson);
+        assertFalse(memFind.lastBson.contains("stored"), memFind.lastBson);
+        assertFalse(memFind.lastBson.contains("events"), memFind.lastBson);
+        assertFalse(memFind.lastBson.contains("\"id\""), memFind.lastBson);
     }
 
     @Test
@@ -758,8 +768,15 @@ class MongoUserJourneyTest {
         Goods g2 = new Goods(); g2.setId("m2"); g2.create("香蕉", "水果", 5.0, 20);
         Monitor.New().ConfigDomainRepository(repo);
         BatchResult<Goods> r = new Batcher<>(Goods.class, repo).add(g1).add(g2).execute();
+        assertEquals(2, r.getTotalCount(), "两条操作都应进入批次");
+        assertEquals(2, r.getSuccessCount(), "CONTINUE 模式下两条都应成功");
         assertEquals(0, r.getFailureCount());
-        assertNotNull(repo.findByID("m1", Goods.class));
+        // 两个成员都要落库：只验 m1 会漏掉"批次丢掉最后一个操作"这类缺陷
+        assertNotNull(repo.findByID("m1", Goods.class), "第一个成员应已落库");
+        Goods m2 = repo.findByID("m2", Goods.class);
+        assertNotNull(m2, "第二个成员应已落库（不能只提交前 n-1 条）");
+        assertEquals("香蕉", m2.getName());
+        assertEquals(5.0, m2.getPrice(), 1e-9);
     }
 
     @Test

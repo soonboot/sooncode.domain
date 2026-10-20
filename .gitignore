@@ -59,3 +59,6 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Local agent workspace (memory / session data, not part of the project)
+.workbuddy/

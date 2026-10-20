@@ -19,16 +19,19 @@ You should receive a response within 48 hours. We will keep you informed of the 
 
 ## Security Considerations
 
-### MongoDB Connection
+### Database Connections (MongoDB / PostgreSQL)
 
 - Always use **authenticated connections** in production.
 - Never hardcode credentials in source code — use environment variables or secure configuration.
-- Restrict MongoDB network access to trusted hosts only.
+- Restrict database network access to trusted hosts only.
+- PostgreSQL: the auto-create path connects via the maintenance database (`postgres` / `template1`)
+  and requires `CREATEDB`; grant the least privilege needed, or create the database manually
+  and pass an existing `DataSource` to `PgConnection`.
 
 ### Event Data
 
-- Event data is stored serialized as JSON via FastJSON in MongoDB.
-- Ensure sensitive data is encrypted at rest in your MongoDB deployment.
+- Event data is stored serialized as JSON via FastJSON (MongoDB documents / PostgreSQL JSONB).
+- Ensure sensitive data is encrypted at rest in your MongoDB or PostgreSQL deployment.
 - Consider event schema versioning for long-lived event streams.
 
 ### Concurrency

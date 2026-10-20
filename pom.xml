@@ -14,8 +14,9 @@
     <packaging>jar</packaging>
 
     <name>SoonCode Domain</name>
-    <description>A Java DDD (Domain-Driven Design) + Event Sourcing framework backed by MongoDB.
-        Provides domain model base classes, event sourcing with snapshots, fluent query API,
+    <description>A Java DDD (Domain-Driven Design) + Event Sourcing framework backed by
+        MongoDB or PostgreSQL. Provides domain model base classes, event sourcing with
+        snapshots, fluent query API, batch/session persistence, recycle bin,
         and monitoring system with auto-denormalization support.</description>
     <url>https://github.com/soonboot/sooncode.domain</url>
 
@@ -39,7 +40,7 @@
         <connection>scm:git:git@github.com:soonboot/sooncode.domain.git</connection>
         <developerConnection>scm:git:git@github.com:soonboot/sooncode.domain.git</developerConnection>
         <url>https://github.com/soonboot/sooncode.domain</url>
-        <tag>v1.7.8</tag>
+        <tag>v1.9.1</tag>
     </scm>
 
     <issueManagement>
@@ -53,7 +54,15 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <skipTests>true</skipTests>
+        <!--
+          不要在这里定义 <skipTests>true</skipTests>：
+          surefire 的参数声明是 @Parameter(property = "skipTests")，
+          项目属性会被直接读到，导致 `mvn test` 也跳过测试（只打印 "Tests are skipped."）。
+          需要快速打包时在命令行加 -DskipTests 即可：mvn package -DskipTests
+        -->
+        <junit.version>5.8.2</junit.version>
+        <surefire.version>3.2.5</surefire.version>
+        <jacoco.version>0.8.12</jacoco.version>
     </properties>
 
     <dependencies>
@@ -95,13 +104,13 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>5.8.2</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
-            <version>5.8.2</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -116,6 +125,50 @@
                     <release>21</release>
                     <encoding>UTF-8</encoding>
                 </configuration>
+            </plugin>
+            <!--
+              必须显式声明 surefire 版本。
+              .mvn/wrapper 锁定的是 Maven 3.6.3，其 super POM 默认绑定
+              surefire 2.12.4（2012 年），不认识 JUnit 5 Platform，
+              跑 `./mvnw test` 会打印 "Tests run: 0" 却 BUILD SUCCESS。
+              显式声明 3.x 后，`mvn` 与 `./mvnw` 两条路径行为一致。
+
+              真实库用例（MongoRealDbTest / PgRealDbTest）不靠 exclude 隐藏：
+              它们改为从环境变量读取连接串，未配置时通过 JUnit Assumptions 自动跳过，
+              配置后（SOONCODE_MONGO_URI / SOONCODE_PG_*）即可参与构建。
+              surefire fork 的 JVM 默认继承父进程环境变量，无需在此显式声明
+              （注意不要用 ${env.X} 传空值：未定义时 Maven 会保留字面量，
+               测试反而会拿到一个非空的假连接串）。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire.version}</version>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <!--
+                  只产出报告，暂不设覆盖率门禁：CI 中真实库用例会跳过，覆盖率天然低于本地，
+                  设固定阈值反而会制造"为了过门禁而写假测试"的动机。等补齐 LookupHandler 等
+                  高优先级缺口后再收紧。
+                -->
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
