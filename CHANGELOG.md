@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - 构建：移除 `pom` 中 `<skipTests>true</skipTests>`（surefire 按属性名读取会导致 `mvn test` 直接跳过，快速打包改用 `-DskipTests`）；显式声明 `maven-surefire-plugin 3.2.5`（wrapper 锁定 Maven 3.6.3 默认绑定 surefire 2.12.4 不认 JUnit 5）；真库用例凭据改为只读环境变量（`SOONCODE_MONGO_URI` / `SOONCODE_PG_*`，未配置用 `Assumptions` 跳过）；接入 JaCoCo 报告（只出数据不设门禁）。
-- CI：新增 `.github/workflows/ci.yml`（test job 跑全量并上传覆盖率；wrapper job 校验 surefire XML 的 `tests` 总数非 0，守住静默通过）。无环境变量 `mvn test` 132 通过（真库 36 例跳过），配环境变量 168 通过。
+- 测试基线：无环境变量 `mvn test` 132 通过（真库 36 例跳过），配环境变量 168 通过（不再接入 GitHub CI，按原有流程发布）。
 
 ## [1.9.1] - 2026-10-19
 
